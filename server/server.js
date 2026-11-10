@@ -46,14 +46,29 @@ function serveStatic(req, res) {
   });
 }
 
+// ================= 유저 구분 쿠키 =================
+// 로그인 없이 브라우저 단위로 구분: 처음 페이지를 열 때 서버가 랜덤 ID 를 HttpOnly 쿠키로 발급, WebSocket 접속 시 자동 전송됨
+const UID_COOKIE = 'cd_uid';
+const UID_MAX_AGE = 60 * 60 * 24 * 365 * 2; // 2년
+function readUid(req) {
+  const m = /(?:^|;\s*)cd_uid=([0-9a-f]{32,64})(?:;|$)/.exec(req.headers.cookie || '');
+  return m ? m[1] : null;
+}
+function issueUid(req, res) {
+  if (readUid(req)) return;
+  const https = req.headers['x-forwarded-proto'] === 'https' || !!req.socket.encrypted; // Render 등은 프록시 뒤 https
+  res.setHeader('Set-Cookie', `${UID_COOKIE}=${crypto.randomBytes(24).toString('hex')}; Path=/; Max-Age=${UID_MAX_AGE}; HttpOnly; SameSite=Lax${https ? '; Secure' : ''}`);
+}
+
 const server = http.createServer((req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
+  issueUid(req, res);
   serveStatic(req, res);
 });
 
 // ================= 게임 방 상태 =================
 const COLORS = ['#ff6b6b', '#ffa94d', '#ffd43b', '#69db7c', '#38d9a9', '#4dabf7', '#748ffc', '#da77f2', '#f783ac', '#a9e34b'];
-const users = new Map();   // sid -> user { sid, id, name, color, ws }
+const users = new Map();   // uid(쿠키 원본, 비공개) -> user { sid, id, name, color, ws }
 let queue = [];            // user[] (대기 순서)
 let player = null;         // 현재 차례 user
 let turnTimer = null;
@@ -126,8 +141,10 @@ function removeUser(u) {
 function log(t) { console.log(new Date().toISOString().slice(11, 19), t); }
 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
-wss.on('connection', ws => {
+wss.on('connection', (ws, req) => {
   let me = null;
+  // 쿠키가 없으면(다른 주소에서 ?server= 로 접속 등) 이번 연결 한정 임시 ID
+  const uid = readUid(req) || crypto.randomBytes(24).toString('hex');
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', raw => {
@@ -137,11 +154,11 @@ wss.on('connection', ws => {
 
     if (m.t === 'hello') {
       if (me) return;
-      if (typeof m.sid !== 'string' || !/^[0-9a-f]{16,64}$/.test(m.sid)) return ws.close();
-      // 같은 세션 ID 가 이미 접속 중(탭 복제 등)이면 새 ID 발급 요청
-      if (users.has(m.sid)) return send(ws, { t: 'sid_conflict' });
-      const id = crypto.createHash('sha256').update(m.sid).digest('hex').slice(0, 10); // 공개용 ID (세션 ID 원문은 공유하지 않음)
-      me = { sid: m.sid, id, name: 'Guest-' + id.slice(0, 4).toUpperCase(), color: COLORS[parseInt(id.slice(4, 6), 16) % COLORS.length], ws };
+      // 같은 브라우저의 다른 탭이 이미 접속 중이면 새 탭으로 전환: 기존 탭은 종료 안내 후 끊음(기존 탭은 재연결 안 함)
+      const old = users.get(uid);
+      if (old) { send(old.ws, { t: 'replaced' }); removeUser(old); old.ws.close(4001, 'replaced'); }
+      const id = crypto.createHash('sha256').update(uid).digest('hex').slice(0, 10); // 공개용 ID (쿠키 원본은 공유하지 않음)
+      me = { sid: uid, id, name: 'Guest-' + id.slice(0, 4).toUpperCase(), color: COLORS[parseInt(id.slice(4, 6), 16) % COLORS.length], ws };
       users.set(me.sid, me);
       log(`join ${me.name} (${users.size})`);
       send(ws, { ...presenceMsg(), t: 'welcome', you: pub(me), snapshot, guestbook: guestbook.slice(-GB_SEND) });

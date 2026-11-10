@@ -426,6 +426,7 @@
   function spectatorMsg() {
     if (role === 'connecting') return '서버 연결 중...';
     if (role === 'offline') return '서버 연결 끊김, 재연결 중...';
+    if (role === 'replaced') return '다른 탭에서 접속해 이 탭은 연결 종료 (새로고침하면 이 탭으로 전환)';
     const p = userById(presence.player);
     const qi = me ? presence.queue.indexOf(me.id) : -1;
     if (p) return `${p.name} 플레이 중 · ${PHASE_TEXT[st.phase] || ''}` + (qi >= 0 ? ` · 내 순서 ${qi + 1}번째` : '');
@@ -455,7 +456,7 @@
     $('meName').style.color = me.color;
     const btn = $('queueBtn');
     const qi = presence.queue.indexOf(me.id);
-    btn.disabled = role === 'player' || role === 'offline';
+    btn.disabled = role === 'player' || role === 'offline' || role === 'replaced';
     btn.textContent = role === 'player' ? '내 차례 (1판)' : qi >= 0 ? `대기 취소 (${qi + 1}번째)` : (!presence.player && !presence.queue.length ? '플레이하기' : '대기열 등록');
     const canControl = role === 'player';
     $('refillBtn').disabled = !canControl;
@@ -499,6 +500,12 @@
         break;
       case 'chat':
         if (typeof m.text === 'string') showBubble(m.id, m.text);
+        break;
+      case 'replaced': // 같은 브라우저의 다른 탭이 접속 → 이 탭은 구경도 종료
+        if (role === 'player') becomeSpectator();
+        role = 'replaced';
+        presence = { users: [], queue: [], player: null };
+        updateNetUi();
         break;
       case 'gb_reject':
         toast(m.reason || '등록 실패');
