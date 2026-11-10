@@ -14,6 +14,7 @@ const ROOT = path.resolve(__dirname, '..');
 const TURN_LIMIT_MS = Number(process.env.TURN_LIMIT_MS) || 45000; // 한 차례 최대 시간 (조준 20초 + 집게 동작 여유)
 const MAX_PRIZES = 80;
 const GB_FILE = process.env.GB_FILE || path.join(__dirname, 'data', 'guestbook.json');
+const CHAT_MAX_LEN = 20, CHAT_INTERVAL_MS = 1000; // 채팅: 저장 없이 중계만
 const GB_KEEP = 200, GB_SEND = 200, GB_MAX_LEN = 100, GB_INTERVAL_MS = 5000; // 오늘 건수 계산을 위해 보관분 전체 전송
 
 // ================= 정적 파일 =================
@@ -88,9 +89,9 @@ function saveGuestbook() {
     });
   }, 500);
 }
-function cleanText(t) {
+function cleanText(t, max = GB_MAX_LEN) {
   if (typeof t !== 'string') return '';
-  return Array.from(t.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, GB_MAX_LEN).join('');
+  return Array.from(t.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, max).join('');
 }
 
 // 차례가 끝나면 들려 있던 인형은 놓은 상태로 정리
@@ -181,6 +182,14 @@ wss.on('connection', ws => {
         saveGuestbook();
         broadcast({ t: 'gb_new', entry });
         log(`guestbook ${me.name}`);
+        break;
+      }
+      case 'chat': {
+        const text = cleanText(m.text, CHAT_MAX_LEN);
+        const now = Date.now();
+        if (!text || (me.chatAt && now - me.chatAt < CHAT_INTERVAL_MS)) break;
+        me.chatAt = now;
+        broadcast({ t: 'chat', id: me.id, text });
         break;
       }
       case 'turn_end':

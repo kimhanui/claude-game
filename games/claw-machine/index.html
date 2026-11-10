@@ -37,7 +37,18 @@
 
   #msg { top:calc(var(--sat) + 58px); left:50%; transform:translateX(-50%); max-width:calc(100% - 24px); text-align:center;
     background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:5px 12px; font-size:13px; line-height:1.35; pointer-events:none; }
-  #top.open ~ #msg { display:none; }
+  #top.open ~ #msg, #top.chat ~ #msg { display:none; }
+  /* 채팅(멀티): 모바일은 💬 버튼으로 입력 줄 열기 */
+  #chatBtn { display:none; }
+  body.multi #chatBtn { display:inline-flex; margin-left:auto; }
+  body.multi #menuBtn { margin-left:0; }
+  #top #chatForm { display:none; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:6px; }
+  body.multi #top.chat #chatForm { display:flex; }
+  #chatInput { flex:1; min-width:0; min-height:40px; background:rgba(0,0,0,.25); color:var(--text); border:1px solid var(--line); border-radius:10px;
+    padding:0 10px; font-size:16px; font-family:inherit; user-select:text; -webkit-user-select:text; }
+  #chatInput:focus { outline:none; border-color:var(--accent); }
+  #chatLeft { font-size:12px; color:var(--sub); min-width:20px; text-align:right; }
+  #chatSend { background:var(--hot); border-color:var(--hot-line); font-weight:700; }
   #toast { top:38%; left:50%; transform:translate(-50%,-50%) scale(.8); font-size:28px; font-weight:800; color:var(--accent); white-space:nowrap;
     text-shadow:0 3px 12px rgba(0,0,0,.6); opacity:0; transition:opacity .25s, transform .25s; pointer-events:none; }
   #toast.show { opacity:1; transform:translate(-50%,-50%) scale(1); }
@@ -132,7 +143,9 @@
     .chip .lbl { display:inline; }
     .chip .ico { display:none; }
     #msg { top:calc(var(--sat) + 64px); font-size:15px; padding:6px 16px; }
-    #top.open ~ #msg { display:block; }
+    #top.open ~ #msg, #top.chat ~ #msg { display:block; }
+    body.multi #chatBtn { display:none; }
+    body.multi #top #chatForm { display:flex; position:fixed; left:50%; bottom:56px; transform:translateX(-50%); width:min(380px, 40vw); }
     #toast { font-size:34px; }
     #people { top:108px; bottom:auto; width:230px; padding:8px 10px; }
     #peopleList { order:0; }
@@ -169,6 +182,7 @@
     <div class="chip single-only"><span class="ico">🪙</span><span class="lbl">코인</span> <b id="coins">10</b></div>
     <div class="chip" id="wonChip" title="컬렉션 열기"><span class="ico">🧸</span><span class="lbl">획득(누적)</span> <b id="won">0</b></div>
     <div class="chip"><span class="ico">⏱</span><span class="lbl">시간</span> <b id="timer">-</b></div>
+    <button id="chatBtn" class="icon" aria-label="채팅">💬</button>
     <button id="menuBtn" class="icon" aria-label="메뉴" aria-expanded="false" aria-controls="tools">☰</button>
   </div>
   <div class="row" id="tools">
@@ -182,6 +196,11 @@
     <button id="refillBtn">인형 채우기</button>
     <button id="collBtn">컬렉션 (B)</button>
   </div>
+  <form class="row" id="chatForm" autocomplete="off">
+    <input id="chatInput" type="text" maxlength="20" placeholder="채팅 (최대 20자)" aria-label="채팅 입력" enterkeyhint="send">
+    <span id="chatLeft">20</span>
+    <button id="chatSend" type="submit">전송</button>
+  </form>
 </div>
 <div id="msg" class="hud">방향키로 이동, DROP 으로 내리기</div>
 <div id="toast" class="hud">GET!</div>
@@ -202,7 +221,7 @@
   <ul id="peopleList"></ul>
   <button id="queueBtn">대기열 등록</button>
 </div>
-<div id="help" class="hud">←↑↓→ / WASD 이동 · Space 내리기 · C 시점 전환 · 휠/+− 줌 · B 컬렉션 · G 방명록</div>
+<div id="help" class="hud">←↑↓→ / WASD 이동 · Space 내리기 · C 시점 전환 · 휠/+− 줌 · Enter 채팅 · B 컬렉션 · G 방명록</div>
 
 <div id="collection" role="dialog" aria-modal="true" aria-labelledby="collTitle">
   <div class="coll-panel">

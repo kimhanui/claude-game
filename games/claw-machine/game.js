@@ -497,6 +497,9 @@
       case 'gb_new':
         if (m.entry) addGuestbookEntry(m.entry);
         break;
+      case 'chat':
+        if (typeof m.text === 'string') showBubble(m.id, m.text);
+        break;
       case 'gb_reject':
         toast(m.reason || '등록 실패');
         break;
@@ -553,6 +556,7 @@
     const label = labelSprite((isPlayer ? '🕹 ' : '') + u.name + (isMe ? ' (나)' : ''), u.color);
     label.position.y = 1.1;
     g.add(label);
+    g.userData.uid = u.id;
     return g;
   }
   let avatarKey = '', avatars = [];
@@ -582,6 +586,69 @@
   }
 
   // ================= 방명록 (멀티 모드, 서버 저장) =================
+  // ================= 채팅 말풍선 (멀티 모드, 저장 없음) =================
+  const CHAT_MAX = 20, BUBBLE_MS = 6000;
+  const bubbles = new Map(); // 사용자 공개 ID -> { sp, until }
+  let bubbleOrder = 30;
+  function bubbleSprite(text) {
+    const chars = Array.from(text), lines = [];
+    for (let i = 0; i < chars.length; i += 10) lines.push(chars.slice(i, i + 10).join('')); // 10자씩 줄바꿈 (최대 2줄)
+    const c = document.createElement('canvas');
+    const font = 'bold 44px system-ui, sans-serif', LH = 54, PAD = 18, TAIL = 26;
+    const g0 = c.getContext('2d');
+    g0.font = font;
+    const tw = Math.max(40, ...lines.map(l => Math.ceil(g0.measureText(l).width)));
+    c.width = tw + 60; c.height = PAD * 2 + LH * lines.length + TAIL;
+    const g = c.getContext('2d');
+    const bh = c.height - TAIL;
+    g.fillStyle = 'rgba(255,255,255,.96)';
+    g.beginPath();
+    if (g.roundRect) g.roundRect(4, 4, c.width - 8, bh - 4, 30); else g.rect(4, 4, c.width - 8, bh - 4);
+    g.moveTo(c.width / 2 - 16, bh - 2); g.lineTo(c.width / 2, c.height - 2); g.lineTo(c.width / 2 + 16, bh - 2);
+    g.fill();
+    g.fillStyle = '#1d1b2e'; g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle';
+    lines.forEach((l, i) => g.fillText(l, c.width / 2, PAD + LH * (i + 0.5) + 2));
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+    const unit = 0.0085; // 캔버스 1px 당 월드 크기
+    sp.scale.set(c.width * unit, c.height * unit, 1);
+    sp.center.set(0.5, 0); // 아래 꼬리 끝을 기준점으로
+    sp.renderOrder = bubbleOrder++; // 최근 말풍선이 위로
+    return sp;
+  }
+  function dropBubble(id) {
+    const b = bubbles.get(id);
+    if (!b) return;
+    scene.remove(b.sp); b.sp.material.map.dispose(); b.sp.material.dispose();
+    bubbles.delete(id);
+  }
+  function showBubble(id, text) {
+    dropBubble(id);
+    const sp = bubbleSprite(Array.from(text).slice(0, CHAT_MAX).join(''));
+    sp.visible = false;
+    scene.add(sp);
+    bubbles.set(id, { sp, until: performance.now() + BUBBLE_MS });
+  }
+  function updateBubbles(now) {
+    for (const [id, b] of bubbles) {
+      if (now > b.until) { dropBubble(id); continue; }
+      const a = avatars.find(o => o.userData.uid === id); // 아바타가 표시되지 않은 사람(슬롯 초과)은 숨김
+      b.sp.visible = !!a;
+      if (a) b.sp.position.set(a.position.x, 1.35, a.position.z);
+    }
+  }
+  const $chatInput = $('chatInput'), $top0 = $('top');
+  function setChat(open) {
+    $top0.classList.toggle('chat', open);
+    if (open) { $top0.classList.remove('open'); keys.clear(); $chatInput.focus(); } else $chatInput.blur();
+  }
+  function sendChat() {
+    const text = $chatInput.value.trim();
+    if (!text || !conn) return;
+    conn.send({ t: 'chat', text: Array.from(text).slice(0, CHAT_MAX).join('') });
+    $chatInput.value = '';
+    $('chatLeft').textContent = CHAT_MAX;
+  }
+
   const GB_MAX = 100;
   let guestbook = [], gbUnread = 0;
   const $gb = $('guestbook'), $gbList = $('gbList'), $gbInput = $('gbInput');
@@ -887,8 +954,10 @@
   const KEYMAP = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', a: 'left', d: 'right', w: 'up', s: 'down' };
   window.addEventListener('keydown', e => {
     if (gbOpen()) { if (e.key === 'Escape') closeGuestbook(); return; } // 방명록 입력 중 게임 조작 차단
+    if (e.target === $chatInput) { if (e.key === 'Escape') setChat(false); return; } // 채팅 입력 중 게임 조작 차단
     const tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (e.key === 'Enter' && me && !collOpen()) { e.preventDefault(); setChat(true); return; }
     if (e.key.toLowerCase() === 'g' && !collOpen()) { e.preventDefault(); openGuestbook(); return; }
     if (e.key.toLowerCase() === 'b') { collOpen() ? closeCollection() : openCollection(); return; }
     if (collOpen()) { if (e.key === 'Escape') closeCollection(); return; } // 팝업 중 게임 조작 차단
@@ -914,9 +983,10 @@
   $('dropBtn').addEventListener('click', drop);
   // 모바일 메뉴(도구 줄)·접속자 목록 접기/펼치기
   const $top = $('top');
-  function setMenu(open) { $top.classList.toggle('open', open); $('menuBtn').setAttribute('aria-expanded', open); }
+  function setMenu(open) { if (open) $top.classList.remove('chat'); $top.classList.toggle('open', open); $('menuBtn').setAttribute('aria-expanded', open); }
   $('menuBtn').addEventListener('click', () => setMenu(!$top.classList.contains('open')));
-  canvas.addEventListener('pointerdown', () => setMenu(false));
+  canvas.addEventListener('pointerdown', () => { setMenu(false); if (!wideChat()) setChat(false); });
+  const wideChat = () => !!(window.matchMedia && window.matchMedia('(min-width: 760px) and (min-height: 501px)').matches);
   // 줌 (버튼·휠·두 손가락·+/- 키). zoom < 1 확대, > 1 축소
   const ZOOM_MIN = 0.45, ZOOM_MAX = 1.5;
   let zoom = 1;
@@ -951,6 +1021,9 @@
     $('peopleToggle').setAttribute('aria-expanded', open);
   });
   $('wonChip').addEventListener('click', openCollection);
+  $('chatBtn').addEventListener('click', () => setChat(!$top.classList.contains('chat')));
+  $('chatForm').addEventListener('submit', e => { e.preventDefault(); sendChat(); });
+  $chatInput.addEventListener('input', () => { $('chatLeft').textContent = CHAT_MAX - Array.from($chatInput.value).length; });
   $('collBtn').addEventListener('click', openCollection);
   $('bag').addEventListener('click', openCollection);
   $('collClose').addEventListener('click', closeCollection);
@@ -1050,6 +1123,7 @@
     const my = hit ? hit.point.y + 0.02 : (inChuteXZ(st.x, st.z) ? CHUTE_WALL_H + 0.02 : 0.02);
     marker.position.set(st.x, my, st.z);
     marker.visible = st.phase === 'aim' || st.phase === 'drop';
+    updateBubbles(performance.now());
 
     for (const p of prizes) {
       p.mesh.position.set(p.x, p.y, p.z);
