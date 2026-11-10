@@ -35,11 +35,11 @@
   #top.open #tools { display:flex !important; }
   #tools > * { flex:1 1 auto; }
 
-  #msg { top:calc(var(--sat) + 58px); left:50%; transform:translateX(-50%); max-width:calc(100% - 24px); text-align:center;
+  #msg { top:calc(var(--sat) + 108px); left:50%; transform:translateX(-50%); max-width:calc(100% - 24px); text-align:center;
     background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:5px 12px; font-size:13px; line-height:1.35; pointer-events:none; }
   #top.open ~ #msg, #top.chat ~ #msg { display:none; }
   /* 흐르는 채팅: 상단 바·안내 문구 아래 3줄 */
-  #danmaku { top:calc(var(--sat) + 112px); left:0; right:0; height:90px; overflow:hidden; pointer-events:none; z-index:1; transition:opacity .3s; }
+  #danmaku { top:calc(var(--sat) + 146px); left:0; right:0; height:90px; overflow:hidden; pointer-events:none; z-index:1; transition:opacity .3s; }
   body.myturn #danmaku { opacity:.35; }
   body.no-danmaku #danmaku { display:none; }
   #danmaku .dm { position:absolute; left:0; height:28px; display:flex; align-items:center; gap:6px; white-space:nowrap; will-change:transform;
@@ -70,6 +70,8 @@
     width:var(--drop); height:var(--drop); border-radius:50%; background:var(--hot); border:3px solid var(--hot-line);
     font-size:18px; font-weight:800; box-shadow:0 6px 18px rgba(226,71,91,.45); touch-action:none; }
   #dropBtn:active { transform:scale(.94); }
+  #dropBtn.alt { font-size:14px; line-height:1.2; white-space:pre-line; text-align:center; }
+  #msg:empty { display:none !important; }
   #bag { display:none; }
   /* 줌: 방향 패드와 DROP 사이 세로 버튼 묶음 */
   #zoom { left:calc(var(--sal) + 12px + var(--key) * 3 + 12px + 8px); bottom:calc(var(--sab) + 14px); display:flex; flex-direction:column; gap:6px; }
@@ -80,22 +82,23 @@
   /* 접속자 패널(멀티): 모바일은 DROP 위에 접힌 상태, 탭하면 목록이 위로 펼쳐짐 */
   .multi-only { display:none !important; }
   body.multi .single-only { display:none !important; }
-  #people { right:calc(var(--sar) + 10px); bottom:calc(var(--sab) + 14px + var(--key) * 3 + 12px + 10px); width:min(200px, 46vw);
+  /* 접속자 패널(멀티): 상단바 바로 아래 오른쪽, 기본 접힘, 목록은 아래로 펼침. 플레이하기는 DROP 버튼이 담당 */
+  #people { right:calc(var(--sar) + 8px); top:calc(var(--sat) + 56px); width:min(220px, 60vw);
     flex-direction:column; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:6px; font-size:13px; }
   body.multi #people { display:flex !important; }
   #peopleToggle { width:100%; min-height:34px; border:none; background:none; color:var(--sub); justify-content:space-between; padding:0 4px; font-size:13px; }
   #peopleToggle b { color:var(--text); }
   #peopleToggle > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
-  #peopleToggle .caret { transition:transform .15s; }
-  #people.open #peopleToggle .caret { transform:rotate(180deg); }
-  #peopleList { order:-1; display:none; list-style:none; margin:0; padding:0 4px; max-height:32vh; overflow-y:auto; }
+  #peopleToggle .caret { transition:transform .15s; transform:rotate(180deg); }
+  #people.open #peopleToggle .caret { transform:none; }
+  #peopleList { display:none; list-style:none; margin:0; padding:0 4px; max-height:32vh; overflow-y:auto; }
   #people.open #peopleList { display:block; }
   #peopleList li { display:flex; align-items:center; gap:6px; padding:4px 0; }
   #peopleList li.me .pname { font-weight:800; }
   #peopleList .dot { width:10px; height:10px; border-radius:50%; flex:none; }
   #peopleList .pname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #peopleList .pstat { color:var(--sub); font-size:12px; }
-  #queueBtn { width:100%; min-height:44px; background:var(--hot); border-color:var(--hot-line); font-weight:700; }
+  #queueBtn { display:none; width:100%; min-height:44px; background:var(--hot); border-color:var(--hot-line); font-weight:700; }
   #queueBtn:disabled { background:var(--panel); border-color:var(--line); }
 
   /* 팝업(컬렉션·방명록): 모바일은 아래에서 올라오는 시트 */
@@ -136,10 +139,6 @@
   /* 가로 휴대폰: 높이가 낮으므로 조작부를 작게 */
   @media (orientation:landscape) and (max-height:500px) {
     :root { --key:46px; --drop:78px; }
-    #people { bottom:auto; top:calc(var(--sat) + 56px); }
-    #peopleList { order:0; }
-    #peopleToggle .caret { transform:rotate(180deg); }
-    #people.open #peopleToggle .caret { transform:none; }
   }
 
   /* 넓은 화면: 도구를 상단에 펼쳐 두고 라벨 표시 */
@@ -157,10 +156,8 @@
     #danmaku .dm { font-size:18px; }
     body.multi #top #chatForm { display:flex; position:fixed; left:50%; bottom:56px; transform:translateX(-50%); width:min(380px, 40vw); }
     #toast { font-size:34px; }
-    #people { top:108px; bottom:auto; width:230px; padding:8px 10px; }
-    #peopleList { order:0; }
-    #peopleToggle .caret { transform:rotate(180deg); }
-    #people.open #peopleToggle .caret { transform:none; }
+    #people { top:108px; width:230px; padding:8px 10px; }
+    #queueBtn { display:inline-flex; }
     #collection, #guestbook { align-items:center; padding:16px; }
     .coll-panel { max-width:720px; max-height:100%; border-radius:16px; padding-bottom:0; }
     #collGrid { grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); }
@@ -170,7 +167,6 @@
   @media (hover:hover) and (pointer:fine) {
     #dpad { display:none; }
     #dropBtn { --drop:76px; bottom:calc(var(--sab) + 16px); font-size:16px; }
-    #people { bottom:auto; top:108px; }
     #zoom { left:auto; right:104px; bottom:24px; flex-direction:row; }
     #bag { display:block; bottom:16px; left:12px; max-width:40vw; min-height:0; padding:6px 10px; cursor:pointer; }
     #bag:hover { border-color:var(--accent); }

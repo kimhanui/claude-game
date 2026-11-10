@@ -430,7 +430,7 @@
     const p = userById(presence.player);
     const qi = me ? presence.queue.indexOf(me.id) : -1;
     if (p) return `${p.name} 플레이 중 · ${PHASE_TEXT[st.phase] || ''}` + (qi >= 0 ? ` · 내 순서 ${qi + 1}번째` : '');
-    return '비어 있음: "플레이하기" 를 눌러 시작';
+    return ''; // 빈 기계: 안내 문구 없음 (DROP 버튼이 "플레이하기" 로 표시)
   }
 
   function updateNetUi() {
@@ -459,6 +459,11 @@
     btn.disabled = role === 'player' || role === 'offline' || role === 'replaced';
     document.body.classList.toggle('myturn', role === 'player'); // 내 차례: 흐르는 채팅 흐리게
     btn.textContent = role === 'player' ? '내 차례 (1판)' : qi >= 0 ? `대기 취소 (${qi + 1}번째)` : (!presence.player && !presence.queue.length ? '플레이하기' : '대기열 등록');
+    // DROP 버튼 겸용: 구경 중에는 플레이하기·대기열 등록·대기 취소, 내 차례에는 DROP
+    const db = $('dropBtn');
+    db.classList.toggle('alt', role !== 'player');
+    db.textContent = role === 'player' ? 'DROP' : qi >= 0 ? `대기 취소\n${qi + 1}번째` : (!presence.player && !presence.queue.length ? '플레이\n하기' : '대기열\n등록');
+    db.disabled = role !== 'player' && role !== 'spectator';
     const canControl = role === 'player';
     $('refillBtn').disabled = !canControl;
     $('strength').disabled = !canControl;
@@ -1007,7 +1012,7 @@
     if (collOpen()) { if (e.key === 'Escape') closeCollection(); return; } // 팝업 중 게임 조작 차단
     const k = KEYMAP[e.key] || KEYMAP[e.key.toLowerCase()];
     if (k) { keys.add(k); e.preventDefault(); }
-    else if (e.key === ' ') { e.preventDefault(); drop(); }
+    else if (e.key === ' ') { e.preventDefault(); dropAction(true); }
     else if (e.key.toLowerCase() === 'c') toggleView();
     else if (e.key === '+' || e.key === '=') setZoom(zoom / 1.25);
     else if (e.key === '-' || e.key === '_') setZoom(zoom * 1.25);
@@ -1024,7 +1029,7 @@
     const up = () => keys.delete(dir);
     btn.addEventListener('pointerup', up); btn.addEventListener('pointercancel', up);
   });
-  $('dropBtn').addEventListener('click', drop);
+  $('dropBtn').addEventListener('click', e => { e.currentTarget.blur(); dropAction(false); });
   // 모바일 메뉴(도구 줄)·접속자 목록 접기/펼치기
   const $top = $('top');
   function setMenu(open) { if (open) $top.classList.remove('chat'); $top.classList.toggle('open', open); $('menuBtn').setAttribute('aria-expanded', open); }
@@ -1078,11 +1083,17 @@
   });
   $('coinBtn').addEventListener('click', () => { coins += 5; if (st.phase === 'aim') startAim(); });
   $('refillBtn').addEventListener('click', () => { if (simulating()) { refill(); if (role === 'player') sendState(); } });
-  $('queueBtn').addEventListener('click', e => {
-    e.currentTarget.blur();
-    if (!conn || !me || role === 'player') return;
-    conn.send({ t: presence.queue.includes(me.id) ? 'queue_leave' : 'queue_join' });
-  });
+  // 대기열 등록/취소 (onlyJoin: Space 키는 등록만 — 연타로 취소되는 것 방지)
+  function toggleQueue(onlyJoin) {
+    if (!conn || !me || role !== 'spectator') return;
+    const inQueue = presence.queue.includes(me.id);
+    if (inQueue && onlyJoin) return;
+    conn.send({ t: inQueue ? 'queue_leave' : 'queue_join' });
+  }
+  function dropAction(fromKey) {
+    if (simulating()) drop(); else toggleQueue(fromKey);
+  }
+  $('queueBtn').addEventListener('click', e => { e.currentTarget.blur(); toggleQueue(false); });
   $('gbClose').addEventListener('click', closeGuestbook);
   $gb.addEventListener('click', e => { if (e.target === $gb) closeGuestbook(); });
   $('gbForm').addEventListener('submit', e => { e.preventDefault(); postGuestbook(); });
@@ -1107,11 +1118,18 @@
     // 사용 가능 영역 (NDC): 실제 HUD 위치로 계산. 터치 조작부는 세로 화면이면 아래, 가로 화면이면 좌우를 비움
     const R = id => { const r = $(id).getBoundingClientRect(); return r.width ? r : null; };
     const tr = R('top'), mr = R('msg'), pad = R('dpad');
-    let topPx = Math.max(56, tr ? tr.bottom : 0, mr ? mr.bottom : 0) + 8, botPx = 16, leftPx = 0, rightPx = 0;
+    // 안내 문구는 비어 있으면 숨겨지므로 CSS 위치 기준으로 자리 확보
+    const msgTop = typeof getComputedStyle === 'function' ? parseFloat(getComputedStyle($('msg')).top) : NaN;
+    let topPx = Math.max(56, tr ? tr.bottom : 0, mr ? mr.bottom : 0, Number.isFinite(msgTop) ? msgTop + 34 : 0) + 8, botPx = 16, leftPx = 0, rightPx = 0;
     if (pad) {
-      const side = [R('dropBtn'), multi ? R('people') : null].filter(Boolean);
-      if (h >= w) botPx = h - Math.min(pad.top, ...side.map(r => r.top)) + 8;
-      else { leftPx = pad.right + 8; rightPx = w - Math.min(w, ...side.map(r => r.left)) + 8; }
+      const pr = multi ? R('people') : null;
+      if (h >= w) {
+        if (pr) topPx = Math.max(topPx, pr.bottom + 8); // 세로: 접속목록은 상단바 아래
+        botPx = h - Math.min(pad.top, R('dropBtn') ? R('dropBtn').top : h) + 8;
+      } else {
+        const side = [R('dropBtn'), pr].filter(Boolean);
+        leftPx = pad.right + 8; rightPx = w - Math.min(w, ...side.map(r => r.left)) + 8;
+      }
     }
     const top = 1 - 2 * (topPx / h), bottom = -1 + 2 * (botPx / h);
     const left = -1 + 2 * (leftPx / w), rightN = 1 - 2 * (rightPx / w);
