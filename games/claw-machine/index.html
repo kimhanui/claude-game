@@ -2,76 +2,98 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#14121f">
 <title>Claw Drop 3D</title>
 <style>
-  :root { --bg:#14121f; --panel:rgba(30,27,48,.82); --text:#f3f0ff; --sub:#a9a3c9; --line:#47426b; --accent:#ffb84d; }
-  * { box-sizing:border-box; }
-  html, body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--text);
+  /* 모바일 퍼스트: 기본 스타일 = 휴대폰 세로 화면, 넓은 화면·마우스 환경은 아래 미디어 쿼리에서 확장 */
+  :root { --bg:#14121f; --panel:rgba(30,27,48,.86); --text:#f3f0ff; --sub:#a9a3c9; --line:#47426b; --accent:#ffb84d; --hot:#e2475b; --hot-line:#ff8a98;
+    --sat:env(safe-area-inset-top, 0px); --sab:env(safe-area-inset-bottom, 0px); --sal:env(safe-area-inset-left, 0px); --sar:env(safe-area-inset-right, 0px);
+    --gap:10px; --key:56px; --drop:92px; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--text); overscroll-behavior:none;
     font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; user-select:none; -webkit-user-select:none; }
   #view { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; }
   .hud { position:fixed; z-index:2; }
-  #top { top:10px; left:10px; right:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; pointer-events:none; }
-  #top > * { pointer-events:auto; }
-  .chip { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:6px 10px; font-size:14px; }
-  .chip b { font-size:18px; }
-  a.btn, button, select { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px;
-    padding:6px 10px; font-size:14px; cursor:pointer; text-decoration:none; font-family:inherit; }
-  a.btn:hover, button:hover, select:hover { border-color:var(--accent); }
-  #msg { top:64px; left:50%; transform:translateX(-50%); background:var(--panel); border:1px solid var(--line);
-    border-radius:20px; padding:6px 16px; font-size:15px; white-space:nowrap; }
-  #toast { top:40%; left:50%; transform:translate(-50%,-50%) scale(.8); font-size:34px; font-weight:800; color:var(--accent);
+  a.btn, button, select { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:10px;
+    min-height:40px; padding:0 12px; font-size:14px; cursor:pointer; text-decoration:none; font-family:inherit;
+    display:inline-flex; align-items:center; justify-content:center; gap:4px; touch-action:manipulation; }
+  select { appearance:none; -webkit-appearance:none; }
+  button:disabled, select:disabled { opacity:.45; cursor:not-allowed; }
+  .icon { width:40px; padding:0; font-size:18px; }
+
+  /* 상단 바: 1줄(뒤로·상태·메뉴), 메뉴를 열면 도구 줄 표시 */
+  #top { top:calc(var(--sat) + 8px); left:calc(var(--sal) + 8px); right:calc(var(--sar) + 8px); display:flex; flex-direction:column; gap:6px; pointer-events:none; }
+  #top .row { display:flex; gap:6px; align-items:center; pointer-events:auto; }
+  .chip { background:var(--panel); border:1px solid var(--line); border-radius:10px; min-height:40px; padding:0 10px;
+    font-size:13px; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+  .chip b { font-size:17px; }
+  .chip .lbl { display:none; }
+  #wonChip { cursor:pointer; }
+  #menuBtn { margin-left:auto; }
+  #top #tools { display:none; flex-wrap:wrap; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:8px; }
+  #top.open #tools { display:flex !important; }
+  #tools > * { flex:1 1 auto; }
+
+  #msg { top:calc(var(--sat) + 58px); left:50%; transform:translateX(-50%); max-width:calc(100% - 24px); text-align:center;
+    background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:5px 12px; font-size:13px; line-height:1.35; pointer-events:none; }
+  #top.open ~ #msg { display:none; }
+  #toast { top:38%; left:50%; transform:translate(-50%,-50%) scale(.8); font-size:28px; font-weight:800; color:var(--accent); white-space:nowrap;
     text-shadow:0 3px 12px rgba(0,0,0,.6); opacity:0; transition:opacity .25s, transform .25s; pointer-events:none; }
   #toast.show { opacity:1; transform:translate(-50%,-50%) scale(1); }
-  #bag { bottom:12px; left:10px; max-width:45vw; }
-  #bag .items { font-size:22px; letter-spacing:2px; word-break:break-all; }
-  #pad { bottom:12px; right:10px; display:grid; grid-template-columns:repeat(3, 52px); grid-template-rows:repeat(3, 52px); gap:6px; }
-  #pad button { font-size:20px; padding:0; touch-action:none; }
-  #pad #dropBtn { background:#e2475b; border-color:#ff8a98; font-weight:800; font-size:14px; }
-  #help { bottom:12px; left:50%; transform:translateX(-50%); font-size:12px; color:var(--sub); background:var(--panel);
-    border-radius:8px; padding:4px 10px; white-space:nowrap; }
-  @media (max-width: 640px) { #help { display:none; } }
-  #bag { cursor:pointer; }
-  #bag:hover { border-color:var(--accent); }
-  /* 컬렉션 팝업 */
-  #collection, #guestbook { position:fixed; inset:0; z-index:10; display:none; align-items:center; justify-content:center;
-    background:rgba(8,6,18,.6); padding:16px; }
-  #collection.show, #guestbook.show { display:flex; }
-  .coll-panel { width:100%; max-width:720px; max-height:100%; display:flex; flex-direction:column; background:#221f36;
-    border:1px solid var(--line); border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden; }
-  .coll-head { display:flex; align-items:center; gap:8px; padding:14px 16px; border-bottom:1px solid var(--line); }
-  .coll-head h2 { margin:0; font-size:18px; flex:1; }
-  .coll-head h2 span { color:var(--accent); }
-  #collSummary { display:flex; flex-wrap:wrap; gap:6px; padding:10px 16px 0; }
-  .sum { font-size:13px; background:var(--panel); border:1px solid var(--line); border-radius:20px; padding:3px 10px; }
-  .sum.none { opacity:.4; }
-  #collGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:10px; padding:12px 16px 16px; overflow-y:auto; }
-  .item { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:8px; text-align:center; }
-  .item .thumb { width:100%; aspect-ratio:1; display:flex; align-items:center; justify-content:center; font-size:40px;
-    background:radial-gradient(circle at 50% 40%, #3b3660, #26223d); border-radius:8px; object-fit:contain; }
-  .item .name { margin-top:6px; font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:5px; }
-  .item .dot { width:10px; height:10px; border-radius:50%; border:1px solid rgba(255,255,255,.4); }
-  .item .meta { font-size:11px; color:var(--sub); margin-top:2px; }
-  .empty { grid-column:1/-1; text-align:center; color:var(--sub); padding:30px 0; }
-  /* 멀티 모드 */
-  .multi-only { display:none; }
-  body.multi .multi-only { display:block; }
-  body.multi .single-only { display:none; }
-  button:disabled, select:disabled { opacity:.45; cursor:not-allowed; border-color:var(--line); }
-  #people { top:108px; right:10px; width:220px; background:var(--panel); border:1px solid var(--line); border-radius:12px;
-    padding:8px 10px; font-size:13px; }
-  #people .people-head { color:var(--sub); margin-bottom:6px; }
-  #people .people-head b { color:var(--text); }
-  #peopleList { list-style:none; margin:0 0 8px; padding:0; max-height:30vh; overflow-y:auto; }
-  #peopleList li { display:flex; align-items:center; gap:6px; padding:3px 0; }
+
+  /* 하단 조작: 왼쪽 방향 패드(왼손 엄지), 오른쪽 큰 DROP(오른손 엄지) */
+  #dpad { bottom:calc(var(--sab) + 14px); left:calc(var(--sal) + 12px); display:grid; gap:6px;
+    grid-template-columns:repeat(3, var(--key)); grid-template-rows:repeat(3, var(--key)); }
+  #dpad button { min-height:0; padding:0; font-size:20px; border-radius:14px; touch-action:none; }
+  #dpad button:active { border-color:var(--accent); background:rgba(255,184,77,.18); }
+  #dropBtn { bottom:calc(var(--sab) + 14px + (var(--key) * 3 + 12px - var(--drop)) / 2); right:calc(var(--sar) + 16px);
+    width:var(--drop); height:var(--drop); border-radius:50%; background:var(--hot); border:3px solid var(--hot-line);
+    font-size:18px; font-weight:800; box-shadow:0 6px 18px rgba(226,71,91,.45); touch-action:none; }
+  #dropBtn:active { transform:scale(.94); }
+  #bag { display:none; }
+  #help { display:none; }
+
+  /* 접속자 패널(멀티): 모바일은 DROP 위에 접힌 상태, 탭하면 목록이 위로 펼쳐짐 */
+  .multi-only { display:none !important; }
+  body.multi .single-only { display:none !important; }
+  #people { right:calc(var(--sar) + 10px); bottom:calc(var(--sab) + 14px + var(--key) * 3 + 12px + 10px); width:min(200px, 46vw);
+    flex-direction:column; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:6px; font-size:13px; }
+  body.multi #people { display:flex !important; }
+  #peopleToggle { width:100%; min-height:34px; border:none; background:none; color:var(--sub); justify-content:space-between; padding:0 4px; font-size:13px; }
+  #peopleToggle b { color:var(--text); }
+  #peopleToggle .caret { transition:transform .15s; }
+  #people.open #peopleToggle .caret { transform:rotate(180deg); }
+  #peopleList { order:-1; display:none; list-style:none; margin:0; padding:0 4px; max-height:32vh; overflow-y:auto; }
+  #people.open #peopleList { display:block; }
+  #peopleList li { display:flex; align-items:center; gap:6px; padding:4px 0; }
   #peopleList li.me .pname { font-weight:800; }
   #peopleList .dot { width:10px; height:10px; border-radius:50%; flex:none; }
   #peopleList .pname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #peopleList .pstat { color:var(--sub); font-size:12px; }
-  #queueBtn { width:100%; background:#e2475b; border-color:#ff8a98; font-weight:700; }
-  #queueBtn:disabled { background:var(--panel); }
-  /* 방명록 */
-  #gbList { list-style:none; margin:0; padding:12px 16px; overflow-y:auto; flex:1; min-height:120px; }
+  #queueBtn { width:100%; min-height:44px; background:var(--hot); border-color:var(--hot-line); font-weight:700; }
+  #queueBtn:disabled { background:var(--panel); border-color:var(--line); }
+
+  /* 팝업(컬렉션·방명록): 모바일은 아래에서 올라오는 시트 */
+  #collection, #guestbook { position:fixed; inset:0; z-index:10; display:none; align-items:flex-end; justify-content:center; background:rgba(8,6,18,.6); }
+  #collection.show, #guestbook.show { display:flex; }
+  .coll-panel { width:100%; max-height:88%; display:flex; flex-direction:column; background:#221f36; border:1px solid var(--line);
+    border-radius:18px 18px 0 0; box-shadow:0 -10px 40px rgba(0,0,0,.5); overflow:hidden; padding-bottom:var(--sab); }
+  .coll-head { display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--line); }
+  .coll-head h2 { margin:0; font-size:17px; flex:1; }
+  .coll-head h2 span { color:var(--accent); }
+  #collSummary { display:flex; flex-wrap:wrap; gap:6px; padding:10px 14px 0; }
+  .sum { font-size:12px; background:var(--panel); border:1px solid var(--line); border-radius:20px; padding:3px 9px; }
+  .sum.none { opacity:.4; }
+  #collGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); gap:8px; padding:12px 14px 14px; overflow-y:auto; }
+  .item { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:6px; text-align:center; }
+  .item .thumb { width:100%; aspect-ratio:1; display:flex; align-items:center; justify-content:center; font-size:36px;
+    background:radial-gradient(circle at 50% 40%, #3b3660, #26223d); border-radius:8px; object-fit:contain; }
+  .item .name { margin-top:6px; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:5px; }
+  .item .dot { width:10px; height:10px; border-radius:50%; border:1px solid rgba(255,255,255,.4); }
+  .item .meta { font-size:11px; color:var(--sub); margin-top:2px; }
+  .empty { grid-column:1/-1; text-align:center; color:var(--sub); padding:30px 0; }
+  #gbList { list-style:none; margin:0; padding:10px 14px; overflow-y:auto; flex:1; min-height:120px; }
   #gbList li { padding:8px 0; border-bottom:1px solid var(--line); }
   #gbList li:last-child { border-bottom:none; }
   #gbList .gb-head { display:flex; align-items:center; gap:6px; font-size:13px; }
@@ -80,54 +102,101 @@
   #gbList .gb-time { color:var(--sub); font-size:11px; margin-left:auto; }
   #gbList .gb-text { margin-top:3px; font-size:14px; line-height:1.45; word-break:break-all; user-select:text; -webkit-user-select:text; }
   #gbList .dot { width:10px; height:10px; border-radius:50%; flex:none; }
-  #gbForm { display:flex; gap:8px; align-items:center; padding:12px 16px; border-top:1px solid var(--line); }
-  #gbInput { flex:1; min-width:0; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px;
-    padding:8px 10px; font-size:14px; font-family:inherit; user-select:text; -webkit-user-select:text; }
+  #gbForm { display:flex; gap:8px; align-items:center; padding:10px 14px; border-top:1px solid var(--line); }
+  #gbInput { flex:1; min-width:0; min-height:44px; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:10px;
+    padding:0 12px; font-size:16px; font-family:inherit; user-select:text; -webkit-user-select:text; } /* 16px 미만이면 iOS 가 확대함 */
   #gbInput:focus { outline:none; border-color:var(--accent); }
-  #gbLeft { font-size:12px; color:var(--sub); min-width:28px; text-align:right; }
-  #gbSend { background:#e2475b; border-color:#ff8a98; font-weight:700; }
-  @media (max-width: 640px) { #people { top:auto; bottom:190px; right:10px; width:180px; } }
+  #gbLeft { font-size:12px; color:var(--sub); min-width:26px; text-align:right; }
+  #gbSend { min-height:44px; background:var(--hot); border-color:var(--hot-line); font-weight:700; }
+
+  /* 가로 휴대폰: 높이가 낮으므로 조작부를 작게 */
+  @media (orientation:landscape) and (max-height:500px) {
+    :root { --key:46px; --drop:78px; }
+    #people { bottom:auto; top:calc(var(--sat) + 56px); }
+    #peopleList { order:0; }
+  }
+
+  /* 넓은 화면: 도구를 상단에 펼쳐 두고 라벨 표시 */
+  @media (min-width:760px) and (min-height:501px) {
+    #top { flex-direction:row; flex-wrap:wrap; }
+    #menuBtn { display:none; }
+    #top #tools, #top.open #tools { display:flex; flex-wrap:wrap; background:none; border:none; padding:0; pointer-events:auto; }
+    #tools > * { flex:none; }
+    .chip .lbl { display:inline; }
+    .chip .ico { display:none; }
+    #msg { top:calc(var(--sat) + 64px); font-size:15px; padding:6px 16px; }
+    #top.open ~ #msg { display:block; }
+    #toast { font-size:34px; }
+    #people { top:108px; bottom:auto; width:230px; padding:8px 10px; }
+    #peopleToggle { pointer-events:none; }
+    #peopleToggle .caret { display:none; }
+    #peopleList, #people.open #peopleList { display:block; order:0; }
+    #collection, #guestbook { align-items:center; padding:16px; }
+    .coll-panel { max-width:720px; max-height:100%; border-radius:16px; padding-bottom:0; }
+    #collGrid { grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); }
+  }
+
+  /* 마우스·키보드 환경: 방향 패드 숨김(키보드 사용), 뽑은 인형·도움말 표시 */
+  @media (hover:hover) and (pointer:fine) {
+    #dpad { display:none; }
+    #dropBtn { --drop:76px; bottom:calc(var(--sab) + 16px); font-size:16px; }
+    #people { bottom:auto; top:108px; }
+    #bag { display:block; bottom:16px; left:12px; max-width:40vw; min-height:0; padding:6px 10px; cursor:pointer; }
+    #bag:hover { border-color:var(--accent); }
+    #bag .items { font-size:22px; letter-spacing:2px; word-break:break-all; }
+    #help { display:block; bottom:16px; left:50%; transform:translateX(-50%); font-size:12px; color:var(--sub); background:var(--panel);
+      border-radius:8px; padding:4px 10px; white-space:nowrap; }
+    a.btn:hover, button:hover, select:hover { border-color:var(--accent); }
+    button:disabled:hover, select:disabled:hover { border-color:var(--line); }
+  }
+  @media (hover:hover) and (pointer:fine) and (max-width:900px) { #help { display:none; } }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
 
 <div id="top" class="hud">
-  <a class="btn" href="../../index.html">← 목록</a>
-  <div class="chip single-only">코인 <b id="coins">10</b></div>
-  <div class="chip">획득(누적) <b id="won">0</b></div>
-  <div class="chip">시간 <b id="timer">-</b></div>
-  <button id="coinBtn" class="single-only">코인 +5</button>
-  <select id="strength" aria-label="집게 힘">
-    <option value="weak">집게 힘: 약</option>
-    <option value="normal" selected>집게 힘: 보통</option>
-    <option value="strong">집게 힘: 강</option>
-  </select>
-  <button id="viewBtn">시점 전환 (C)</button>
-  <button id="refillBtn">인형 채우기</button>
-  <button id="collBtn">컬렉션 (B)</button>
+  <div class="row">
+    <a class="btn icon" href="../../index.html" aria-label="게임 목록">←</a>
+    <div class="chip single-only"><span class="ico">🪙</span><span class="lbl">코인</span> <b id="coins">10</b></div>
+    <div class="chip" id="wonChip" title="컬렉션 열기"><span class="ico">🧸</span><span class="lbl">획득(누적)</span> <b id="won">0</b></div>
+    <div class="chip"><span class="ico">⏱</span><span class="lbl">시간</span> <b id="timer">-</b></div>
+    <button id="menuBtn" class="icon" aria-label="메뉴" aria-expanded="false" aria-controls="tools">☰</button>
+  </div>
+  <div class="row" id="tools">
+    <button id="coinBtn" class="single-only">코인 +5</button>
+    <select id="strength" aria-label="집게 힘">
+      <option value="weak">집게 힘: 약</option>
+      <option value="normal" selected>집게 힘: 보통</option>
+      <option value="strong">집게 힘: 강</option>
+    </select>
+    <button id="viewBtn">시점 전환 (C)</button>
+    <button id="refillBtn">인형 채우기</button>
+    <button id="collBtn">컬렉션 (B)</button>
+  </div>
 </div>
-<div id="msg" class="hud">방향키로 이동, Space 로 내리기</div>
+<div id="msg" class="hud">방향키로 이동, DROP 으로 내리기</div>
 <div id="toast" class="hud">GET!</div>
 <div id="bag" class="hud chip"><div style="font-size:12px;color:var(--sub)">뽑은 인형</div><div class="items" id="bagItems">-</div></div>
-<div id="pad" class="hud">
-  <span></span><button data-dir="up">▲</button><span></span>
-  <button data-dir="left">◀</button><button id="dropBtn">DROP</button><button data-dir="right">▶</button>
-  <span></span><button data-dir="down">▼</button><span></span>
+<div id="dpad" class="hud" aria-label="집게 이동">
+  <span></span><button data-dir="up" aria-label="위">▲</button><span></span>
+  <button data-dir="left" aria-label="왼쪽">◀</button><span></span><button data-dir="right" aria-label="오른쪽">▶</button>
+  <span></span><button data-dir="down" aria-label="아래">▼</button><span></span>
 </div>
+<button id="dropBtn" class="hud">DROP</button>
 <div id="people" class="hud multi-only">
-  <div class="people-head">접속 <b id="peopleCount">0</b>명 · 나 <b id="meName">-</b></div>
+  <button id="peopleToggle" aria-expanded="false" aria-controls="peopleList"><span>접속 <b id="peopleCount">0</b>명 · <b id="meName">-</b></span><span class="caret">▴</span></button>
   <ul id="peopleList"></ul>
   <button id="queueBtn">대기열 등록</button>
 </div>
-<div id="help" class="hud">←↑↓→ / WASD 이동 · Space 내리기 · C 시점 전환 · B 컬렉션</div>
+<div id="help" class="hud">←↑↓→ / WASD 이동 · Space 내리기 · C 시점 전환 · B 컬렉션 · G 방명록</div>
 
 <div id="collection" role="dialog" aria-modal="true" aria-labelledby="collTitle">
   <div class="coll-panel">
     <div class="coll-head">
       <h2 id="collTitle">뽑은 인형 <span id="collCount">0</span></h2>
       <button id="collClear">기록 비우기</button>
-      <button id="collClose" aria-label="닫기">닫기 ✕</button>
+      <button id="collClose" class="icon" aria-label="닫기">✕</button>
     </div>
     <div id="collSummary"></div>
     <div id="collGrid"></div>
@@ -138,11 +207,11 @@
   <div class="coll-panel">
     <div class="coll-head">
       <h2 id="gbTitle">방명록 <span id="gbCount">0</span></h2>
-      <button id="gbClose" aria-label="닫기">닫기 ✕</button>
+      <button id="gbClose" class="icon" aria-label="닫기">✕</button>
     </div>
     <ul id="gbList"></ul>
     <form id="gbForm" autocomplete="off">
-      <input id="gbInput" type="text" maxlength="100" placeholder="한 줄 남기기 (최대 100자)" aria-label="방명록 내용">
+      <input id="gbInput" type="text" maxlength="100" placeholder="한 줄 남기기 (최대 100자)" aria-label="방명록 내용" enterkeyhint="send">
       <span id="gbLeft">100</span>
       <button id="gbSend" type="submit">등록</button>
     </form>

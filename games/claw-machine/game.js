@@ -734,6 +734,8 @@
     $('gbLeft').textContent = GB_MAX;
   }
 
+  const TOUCH = !!(window.matchMedia && window.matchMedia('(hover: none), (pointer: coarse)').matches);
+  const HOWTO = TOUCH ? '◀▲▼▶ 로 이동, DROP 으로 내리기' : '방향키로 이동, Space 로 내리기';
   function setMsg(t) { ui.msg.textContent = t; }
   function toast(t) {
     ui.toast.textContent = t; ui.toast.classList.add('show');
@@ -749,8 +751,8 @@
 
   function startAim() {
     st.phase = 'aim'; st.timer = AIM_TIME;
-    if (role === 'player') setMsg('내 차례 (1판): 방향키로 이동, Space 로 내리기');
-    else setMsg(coins > 0 ? '방향키로 이동, Space 로 내리기' : '코인 부족: "코인 +5" 를 눌러 충전');
+    if (role === 'player') setMsg('내 차례 (1판): ' + HOWTO);
+    else setMsg(coins > 0 ? HOWTO : '코인 부족: "코인 +5" 를 눌러 충전');
   }
 
   function drop() {
@@ -900,13 +902,23 @@
     if (k) keys.delete(k);
   });
   window.addEventListener('blur', () => keys.clear());
-  document.querySelectorAll('#pad [data-dir]').forEach(btn => {
+  document.querySelectorAll('#dpad [data-dir]').forEach(btn => {
     const dir = btn.dataset.dir;
     btn.addEventListener('pointerdown', e => { e.preventDefault(); keys.add(dir); btn.setPointerCapture(e.pointerId); });
     const up = () => keys.delete(dir);
     btn.addEventListener('pointerup', up); btn.addEventListener('pointercancel', up);
   });
   $('dropBtn').addEventListener('click', drop);
+  // 모바일 메뉴(도구 줄)·접속자 목록 접기/펼치기
+  const $top = $('top');
+  function setMenu(open) { $top.classList.toggle('open', open); $('menuBtn').setAttribute('aria-expanded', open); }
+  $('menuBtn').addEventListener('click', () => setMenu(!$top.classList.contains('open')));
+  canvas.addEventListener('pointerdown', () => setMenu(false));
+  $('peopleToggle').addEventListener('click', () => {
+    const open = $('people').classList.toggle('open');
+    $('peopleToggle').setAttribute('aria-expanded', open);
+  });
+  $('wonChip').addEventListener('click', openCollection);
   $('collBtn').addEventListener('click', openCollection);
   $('bag').addEventListener('click', openCollection);
   $('collClose').addEventListener('click', closeCollection);
@@ -943,9 +955,19 @@
     const corners = [];
     const multi = document.body.classList.contains('multi'); // 멀티: 왼쪽 방명록·앞쪽·오른쪽 아바타 영역 포함
     for (const x of [multi ? -HALF - 3.5 : -HALF, multi ? HALF + 1.8 : HALF]) for (const y of [0, RAIL_Y + 0.4]) for (const z of [-HALF, multi ? HALF + 1.4 : HALF]) corners.push(new THREE.Vector3(x, y, z));
-    // 사용 가능 영역 (NDC): 상단 HUD ~64px, 하단 여백 ~16px
-    const top = 1 - 2 * (64 / h), bottom = -1 + 2 * (16 / h);
-    const tcy = (top + bottom) / 2, ty = (top - bottom) / 2 * 0.96, tx = 0.94;
+    // 사용 가능 영역 (NDC): 실제 HUD 위치로 계산. 터치 조작부는 세로 화면이면 아래, 가로 화면이면 좌우를 비움
+    const R = id => { const r = $(id).getBoundingClientRect(); return r.width ? r : null; };
+    const tr = R('top'), mr = R('msg'), pad = R('dpad');
+    let topPx = Math.max(56, tr ? tr.bottom : 0, mr ? mr.bottom : 0) + 8, botPx = 16, leftPx = 0, rightPx = 0;
+    if (pad) {
+      const side = [R('dropBtn'), multi ? R('people') : null].filter(Boolean);
+      if (h >= w) botPx = h - Math.min(pad.top, ...side.map(r => r.top)) + 8;
+      else { leftPx = pad.right + 8; rightPx = w - Math.min(w, ...side.map(r => r.left)) + 8; }
+    }
+    const top = 1 - 2 * (topPx / h), bottom = -1 + 2 * (botPx / h);
+    const left = -1 + 2 * (leftPx / w), rightN = 1 - 2 * (rightPx / w);
+    const tcy = (top + bottom) / 2, ty = Math.max(0.3, (top - bottom) / 2 * 0.96);
+    const tcx = (left + rightN) / 2, tx = Math.max(0.3, (rightN - left) / 2 * 0.94);
     const cam = camera.clone();
     const halfT = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
     const v = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vector3();
@@ -966,7 +988,7 @@
         const half = D * halfT;
         right.setFromMatrixColumn(cam.matrixWorld, 0);
         up.setFromMatrixColumn(cam.matrixWorld, 1);
-        look.addScaledVector(right, cx * half * cam.aspect * 0.8).addScaledVector(up, (cy - tcy) * half * 0.8);
+        look.addScaledVector(right, (cx - tcx) * half * cam.aspect * 0.8).addScaledVector(up, (cy - tcy) * half * 0.8);
         D *= Math.pow(Math.max((x1 - x0) / 2 / tx, (y1 - y0) / 2 / ty), 0.8);
       }
       view.pos = cam.position.clone();
