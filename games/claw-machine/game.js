@@ -896,6 +896,9 @@
     if (k) { keys.add(k); e.preventDefault(); }
     else if (e.key === ' ') { e.preventDefault(); drop(); }
     else if (e.key.toLowerCase() === 'c') toggleView();
+    else if (e.key === '+' || e.key === '=') setZoom(zoom / 1.25);
+    else if (e.key === '-' || e.key === '_') setZoom(zoom * 1.25);
+    else if (e.key === '0') setZoom(1);
   });
   window.addEventListener('keyup', e => {
     const k = KEYMAP[e.key] || KEYMAP[e.key.toLowerCase()];
@@ -914,6 +917,35 @@
   function setMenu(open) { $top.classList.toggle('open', open); $('menuBtn').setAttribute('aria-expanded', open); }
   $('menuBtn').addEventListener('click', () => setMenu(!$top.classList.contains('open')));
   canvas.addEventListener('pointerdown', () => setMenu(false));
+  // 줌 (버튼·휠·두 손가락·+/- 키). zoom < 1 확대, > 1 축소
+  const ZOOM_MIN = 0.45, ZOOM_MAX = 1.5;
+  let zoom = 1;
+  const zoomPos = new THREE.Vector3(), zoomLook = new THREE.Vector3(), zoomFocus = new THREE.Vector3();
+  const setZoom = z => { zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)); };
+  $('zoomIn').addEventListener('click', () => setZoom(zoom / 1.25));
+  $('zoomOut').addEventListener('click', () => setZoom(zoom * 1.25));
+  $('zoomReset').addEventListener('click', () => setZoom(1));
+  canvas.addEventListener('wheel', e => { e.preventDefault(); setZoom(zoom * Math.exp(e.deltaY * 0.0015)); }, { passive: false });
+  const touches = new Map();
+  let pinchStart = 0, pinchZoom = 1;
+  const pinchDist = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  canvas.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch') return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 2) { pinchStart = pinchDist(); pinchZoom = zoom; }
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!touches.has(e.pointerId)) return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 2 && pinchStart > 0) setZoom(pinchZoom * pinchStart / pinchDist());
+  });
+  const endTouch = e => { touches.delete(e.pointerId); if (touches.size < 2) pinchStart = 0; };
+  canvas.addEventListener('pointerup', endTouch);
+  canvas.addEventListener('pointercancel', endTouch);
+  // 접속자 목록: 기본은 넓은 화면만 펼침, 헤더 탭으로 접기/펼치기
+  if (window.matchMedia && window.matchMedia('(min-width: 760px) and (min-height: 501px)').matches) {
+    $('people').classList.add('open'); $('peopleToggle').setAttribute('aria-expanded', true);
+  }
   $('peopleToggle').addEventListener('click', () => {
     const open = $('people').classList.toggle('open');
     $('peopleToggle').setAttribute('aria-expanded', open);
@@ -1029,9 +1061,13 @@
       if (p.held) p.mesh.rotation.y += p.spin * dt;
     }
 
+    // 줌: 확대할수록 카메라가 다가가고 시선이 집게 쪽으로 이동
     const v = VIEWS[viewIdx], k = Math.min(1, dt * 4);
-    camPos.lerp(v.pos, k);
-    camLook.lerp(v.look, k);
+    const t = (1 - zoom) / (1 - ZOOM_MIN) * 0.85;
+    zoomLook.copy(v.look).lerp(zoomFocus.set(st.x, Math.min(st.y, 2), st.z), Math.max(0, t));
+    zoomPos.copy(v.pos).sub(v.look).multiplyScalar(zoom).add(zoomLook);
+    camPos.lerp(zoomPos, k);
+    camLook.lerp(zoomLook, k);
     camera.position.copy(camPos);
     camera.lookAt(camLook);
   }

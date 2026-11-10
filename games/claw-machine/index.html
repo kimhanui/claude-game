@@ -52,6 +52,10 @@
     font-size:18px; font-weight:800; box-shadow:0 6px 18px rgba(226,71,91,.45); touch-action:none; }
   #dropBtn:active { transform:scale(.94); }
   #bag { display:none; }
+  /* 줌: 방향 패드와 DROP 사이 세로 버튼 묶음 */
+  #zoom { left:calc(var(--sal) + 12px + var(--key) * 3 + 12px + 8px); bottom:calc(var(--sab) + 14px); display:flex; flex-direction:column; gap:6px; }
+  #zoom button { width:44px; min-height:44px; padding:0; font-size:20px; border-radius:12px; }
+  #zoom #zoomReset { font-size:13px; }
   #help { display:none; }
 
   /* 접속자 패널(멀티): 모바일은 DROP 위에 접힌 상태, 탭하면 목록이 위로 펼쳐짐 */
@@ -62,6 +66,7 @@
   body.multi #people { display:flex !important; }
   #peopleToggle { width:100%; min-height:34px; border:none; background:none; color:var(--sub); justify-content:space-between; padding:0 4px; font-size:13px; }
   #peopleToggle b { color:var(--text); }
+  #peopleToggle > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   #peopleToggle .caret { transition:transform .15s; }
   #people.open #peopleToggle .caret { transform:rotate(180deg); }
   #peopleList { order:-1; display:none; list-style:none; margin:0; padding:0 4px; max-height:32vh; overflow-y:auto; }
@@ -114,6 +119,8 @@
     :root { --key:46px; --drop:78px; }
     #people { bottom:auto; top:calc(var(--sat) + 56px); }
     #peopleList { order:0; }
+    #peopleToggle .caret { transform:rotate(180deg); }
+    #people.open #peopleToggle .caret { transform:none; }
   }
 
   /* 넓은 화면: 도구를 상단에 펼쳐 두고 라벨 표시 */
@@ -128,9 +135,9 @@
     #top.open ~ #msg { display:block; }
     #toast { font-size:34px; }
     #people { top:108px; bottom:auto; width:230px; padding:8px 10px; }
-    #peopleToggle { pointer-events:none; }
-    #peopleToggle .caret { display:none; }
-    #peopleList, #people.open #peopleList { display:block; order:0; }
+    #peopleList { order:0; }
+    #peopleToggle .caret { transform:rotate(180deg); }
+    #people.open #peopleToggle .caret { transform:none; }
     #collection, #guestbook { align-items:center; padding:16px; }
     .coll-panel { max-width:720px; max-height:100%; border-radius:16px; padding-bottom:0; }
     #collGrid { grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); }
@@ -141,6 +148,7 @@
     #dpad { display:none; }
     #dropBtn { --drop:76px; bottom:calc(var(--sab) + 16px); font-size:16px; }
     #people { bottom:auto; top:108px; }
+    #zoom { left:auto; right:104px; bottom:24px; flex-direction:row; }
     #bag { display:block; bottom:16px; left:12px; max-width:40vw; min-height:0; padding:6px 10px; cursor:pointer; }
     #bag:hover { border-color:var(--accent); }
     #bag .items { font-size:22px; letter-spacing:2px; word-break:break-all; }
@@ -184,12 +192,17 @@
   <span></span><button data-dir="down" aria-label="아래">▼</button><span></span>
 </div>
 <button id="dropBtn" class="hud">DROP</button>
+<div id="zoom" class="hud" aria-label="화면 확대·축소">
+  <button id="zoomIn" aria-label="확대">＋</button>
+  <button id="zoomReset" aria-label="원래 크기">1:1</button>
+  <button id="zoomOut" aria-label="축소">－</button>
+</div>
 <div id="people" class="hud multi-only">
   <button id="peopleToggle" aria-expanded="false" aria-controls="peopleList"><span>접속 <b id="peopleCount">0</b>명 · <b id="meName">-</b></span><span class="caret">▴</span></button>
   <ul id="peopleList"></ul>
   <button id="queueBtn">대기열 등록</button>
 </div>
-<div id="help" class="hud">←↑↓→ / WASD 이동 · Space 내리기 · C 시점 전환 · B 컬렉션 · G 방명록</div>
+<div id="help" class="hud">←↑↓→ / WASD 이동 · Space 내리기 · C 시점 전환 · 휠/+− 줌 · B 컬렉션 · G 방명록</div>
 
 <div id="collection" role="dialog" aria-modal="true" aria-labelledby="collTitle">
   <div class="coll-panel">
