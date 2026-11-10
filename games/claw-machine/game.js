@@ -594,22 +594,22 @@
     const chars = Array.from(text), lines = [];
     for (let i = 0; i < chars.length; i += 10) lines.push(chars.slice(i, i + 10).join('')); // 10자씩 줄바꿈 (최대 2줄)
     const c = document.createElement('canvas');
-    const font = 'bold 44px system-ui, sans-serif', LH = 54, PAD = 18, TAIL = 26;
+    const font = 'bold 38px system-ui, sans-serif', LH = 46, PAD = 14, TAIL = 22;
     const g0 = c.getContext('2d');
     g0.font = font;
     const tw = Math.max(40, ...lines.map(l => Math.ceil(g0.measureText(l).width)));
-    c.width = tw + 60; c.height = PAD * 2 + LH * lines.length + TAIL;
+    c.width = tw + 48; c.height = PAD * 2 + LH * lines.length + TAIL;
     const g = c.getContext('2d');
     const bh = c.height - TAIL;
     g.fillStyle = 'rgba(255,255,255,.96)';
     g.beginPath();
-    if (g.roundRect) g.roundRect(4, 4, c.width - 8, bh - 4, 30); else g.rect(4, 4, c.width - 8, bh - 4);
-    g.moveTo(c.width / 2 - 16, bh - 2); g.lineTo(c.width / 2, c.height - 2); g.lineTo(c.width / 2 + 16, bh - 2);
+    if (g.roundRect) g.roundRect(4, 4, c.width - 8, bh - 4, 24); else g.rect(4, 4, c.width - 8, bh - 4);
+    g.moveTo(c.width / 2 - 13, bh - 2); g.lineTo(c.width / 2, c.height - 2); g.lineTo(c.width / 2 + 13, bh - 2);
     g.fill();
     g.fillStyle = '#1d1b2e'; g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle';
     lines.forEach((l, i) => g.fillText(l, c.width / 2, PAD + LH * (i + 0.5) + 2));
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
-    const unit = 0.0085; // 캔버스 1px 당 월드 크기
+    const unit = 0.006; // 캔버스 1px 당 월드 크기
     sp.scale.set(c.width * unit, c.height * unit, 1);
     sp.center.set(0.5, 0); // 아래 꼬리 끝을 기준점으로
     sp.renderOrder = bubbleOrder++; // 최근 말풍선이 위로
