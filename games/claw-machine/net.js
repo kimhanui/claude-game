@@ -1,4 +1,4 @@
-// 멀티 유저 연결 모듈. 서버(server/server.js)가 제공한 http 페이지에서만 활성화, 그 외(file://, Pages https)는 싱글 모드
+// 멀티 유저 연결 모듈. 서버(server/server.js)가 제공한 http(s) 페이지에서 활성화, file:// 이나 서버 없는 곳(Pages)은 싱글 모드
 (() => {
   'use strict';
   const SID_KEY = 'clawdrop.sid';
@@ -23,6 +23,7 @@
     const q = new URLSearchParams(location.search).get('server');
     if (q) return q.includes('://') ? q : `ws://${q}/ws`;
     if (location.protocol === 'http:') return `ws://${location.host}/ws`;
+    if (location.protocol === 'https:') return `wss://${location.host}/ws`; // 외부 호스팅(https). 서버 없는 곳(Pages)은 연결 실패 → 싱글 모드
     return null;
   }
 

@@ -2,13 +2,14 @@
 
 HTML 게임 모음. 루트 `index.html` 을 열면 게임 목록에서 선택해 진입.
 
-## 접속
-- GitLab Pages: https://claude-game-d8f0d7.pages.sginfra.net/
-- `main` 브랜치에 push 하면 `.gitlab-ci.yml` 의 `pages` job 이 자동 배포 (빌드 없이 정적 파일 복사)
+## 외부 서버 배포 (Render 등)
+- 저장소 연결 후 Root Directory `server`, Build `npm install`, Start `node server.js` (포트는 `PORT` 환경변수 사용)
+- 접속: `https://<앱 주소>/games/claw-machine/` → https 페이지는 같은 주소의 `wss://.../ws` 로 자동 연결
+- 무료 플랜은 재시작·재배포 시 방명록·뽑은 횟수 초기화
 
 ## Claw Drop 3D 멀티 유저 (같이 구경하기)
 - 서버를 띄운 PC 주소로 접속하면 멀티 모드: 접속마다 고유 세션 ID(Guest-XXXX), 한 번에 한 명만 플레이(1판씩 대기열 순서), 나머지는 실시간 구경
-- Pages(https)·파일 직접 열기는 서버 연결이 불가해 기존 싱글 모드로 동작 (https 페이지에서 ws:// 차단)
+- 서버 없이 파일을 직접 열거나 서버 연결에 실패하면 싱글 모드로 동작
 - 실행 (Windows, 최초 1회 `npm install`)
   ```
   cd server
