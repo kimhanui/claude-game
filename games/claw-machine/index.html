@@ -38,6 +38,14 @@
   #msg { top:calc(var(--sat) + 58px); left:50%; transform:translateX(-50%); max-width:calc(100% - 24px); text-align:center;
     background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:5px 12px; font-size:13px; line-height:1.35; pointer-events:none; }
   #top.open ~ #msg, #top.chat ~ #msg { display:none; }
+  /* 흐르는 채팅: 상단 바·안내 문구 아래 3줄 */
+  #danmaku { top:calc(var(--sat) + 112px); left:0; right:0; height:90px; overflow:hidden; pointer-events:none; z-index:1; transition:opacity .3s; }
+  body.myturn #danmaku { opacity:.35; }
+  body.no-danmaku #danmaku { display:none; }
+  #danmaku .dm { position:absolute; left:0; height:28px; display:flex; align-items:center; gap:6px; white-space:nowrap; will-change:transform;
+    font-size:16px; font-weight:700; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.9), 0 0 2px rgba(0,0,0,.9); }
+  #danmaku .dot { width:9px; height:9px; border-radius:50%; flex:none; box-shadow:0 0 0 2px rgba(0,0,0,.4); }
+  body.multi #tools #danmakuBtn { display:inline-flex !important; }
   /* 채팅(멀티): 모바일은 💬 버튼으로 입력 줄 열기 */
   #chatBtn { display:none; }
   body.multi #chatBtn { display:inline-flex; margin-left:auto; }
@@ -145,6 +153,8 @@
     #msg { top:calc(var(--sat) + 64px); font-size:15px; padding:6px 16px; }
     #top.open ~ #msg, #top.chat ~ #msg { display:block; }
     body.multi #chatBtn { display:none; }
+    #danmaku { top:calc(var(--sat) + 104px); }
+    #danmaku .dm { font-size:18px; }
     body.multi #top #chatForm { display:flex; position:fixed; left:50%; bottom:56px; transform:translateX(-50%); width:min(380px, 40vw); }
     #toast { font-size:34px; }
     #people { top:108px; bottom:auto; width:230px; padding:8px 10px; }
@@ -195,6 +205,7 @@
     <button id="viewBtn">시점 전환 (C)</button>
     <button id="refillBtn">인형 채우기</button>
     <button id="collBtn">컬렉션 (B)</button>
+    <button id="danmakuBtn" class="multi-only">흐르는 채팅: 켜짐</button>
   </div>
   <form class="row" id="chatForm" autocomplete="off">
     <input id="chatInput" type="text" maxlength="20" placeholder="채팅 (최대 20자)" aria-label="채팅 입력" enterkeyhint="send">
@@ -204,6 +215,7 @@
 </div>
 <div id="msg" class="hud">방향키로 이동, DROP 으로 내리기</div>
 <div id="toast" class="hud">GET!</div>
+<div id="danmaku" class="hud" aria-hidden="true"></div>
 <div id="bag" class="hud chip"><div style="font-size:12px;color:var(--sub)">뽑은 인형</div><div class="items" id="bagItems">-</div></div>
 <div id="dpad" class="hud" aria-label="집게 이동">
   <span></span><button data-dir="up" aria-label="위">▲</button><span></span>

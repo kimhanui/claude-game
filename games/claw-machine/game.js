@@ -457,6 +457,7 @@
     const btn = $('queueBtn');
     const qi = presence.queue.indexOf(me.id);
     btn.disabled = role === 'player' || role === 'offline' || role === 'replaced';
+    document.body.classList.toggle('myturn', role === 'player'); // 내 차례: 흐르는 채팅 흐리게
     btn.textContent = role === 'player' ? '내 차례 (1판)' : qi >= 0 ? `대기 취소 (${qi + 1}번째)` : (!presence.player && !presence.queue.length ? '플레이하기' : '대기열 등록');
     const canControl = role === 'player';
     $('refillBtn').disabled = !canControl;
@@ -499,7 +500,7 @@
         if (m.entry) addGuestbookEntry(m.entry);
         break;
       case 'chat':
-        if (typeof m.text === 'string') showBubble(m.id, m.text);
+        if (typeof m.text === 'string') { showBubble(m.id, m.text); addDanmaku(m.id, m.text); }
         break;
       case 'replaced': // 같은 브라우저의 다른 탭이 접속 → 이 탭은 구경도 종료
         if (role === 'player') becomeSpectator();
@@ -648,6 +649,42 @@
     $top0.classList.toggle('chat', open);
     if (open) { $top0.classList.remove('open'); keys.clear(); $chatInput.focus(); } else $chatInput.blur();
   }
+  // 흐르는 채팅: 상단에서 오른쪽 → 왼쪽으로 지나감 (줄 3개, 앞 글이 다 들어온 줄부터 사용)
+  const DANMAKU_KEY = 'clawdrop.danmaku', DANMAKU_SPEED = 110, DANMAKU_GAP = 40; // px/초, 같은 줄 앞 글과 간격
+  const $dm = $('danmaku');
+  let danmakuOn = true;
+  try { danmakuOn = localStorage.getItem(DANMAKU_KEY) !== 'off'; } catch (e) { /* 저장 불가 환경 */ }
+  const laneFree = [0, 0, 0];
+  function applyDanmaku() {
+    document.body.classList.toggle('no-danmaku', !danmakuOn);
+    $('danmakuBtn').textContent = '흐르는 채팅: ' + (danmakuOn ? '켜짐' : '꺼짐');
+    if (!danmakuOn) $dm.innerHTML = '';
+  }
+  function addDanmaku(id, text) {
+    if (!danmakuOn || !$dm.animate) return;
+    const u = userById(id);
+    const item = document.createElement('div'); item.className = 'dm';
+    const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = u ? u.color : '#888';
+    const t = document.createElement('span'); t.textContent = Array.from(text).slice(0, CHAT_MAX).join('');
+    item.append(dot, t);
+    $dm.appendChild(item);
+    const W = $dm.clientWidth, w = item.offsetWidth, now = performance.now();
+    let lane = 0;
+    for (let i = 1; i < laneFree.length; i++) if (laneFree[i] < laneFree[lane]) lane = i; // 가장 먼저 비는 줄
+    const delay = Math.max(0, laneFree[lane] - now);
+    laneFree[lane] = now + delay + (w + DANMAKU_GAP) / DANMAKU_SPEED * 1000;
+    item.style.top = (lane * 30) + 'px';
+    const anim = item.animate([{ transform: `translateX(${W}px)` }, { transform: `translateX(${-w}px)` }],
+      { duration: (W + w) / DANMAKU_SPEED * 1000, delay, easing: 'linear', fill: 'both' });
+    anim.onfinish = () => item.remove();
+  }
+  $('danmakuBtn').addEventListener('click', () => {
+    danmakuOn = !danmakuOn;
+    try { localStorage.setItem(DANMAKU_KEY, danmakuOn ? 'on' : 'off'); } catch (e) { /* 저장 불가 환경 */ }
+    applyDanmaku();
+  });
+  applyDanmaku();
+
   function sendChat() {
     const text = $chatInput.value.trim();
     if (!text || !conn) return;
