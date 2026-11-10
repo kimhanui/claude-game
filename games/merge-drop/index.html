@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Merge Drop</title>
+<style>
+  :root { --bg:#1d1b2e; --panel:#2b2842; --text:#f3f0ff; --sub:#a9a3c9; --accent:#ffb84d; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; overflow:hidden; }
+  #app { display:flex; flex-direction:column; align-items:center; height:100%; padding:8px 16px; gap:8px; }
+  #hud { width:100%; max-width:420px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .stat { background:var(--panel); border-radius:10px; padding:6px 10px; min-width:72px; }
+  .stat .label { font-size:11px; color:var(--sub); }
+  .stat .value { font-size:20px; font-weight:700; }
+  #nextWrap { display:flex; flex-direction:column; align-items:center; background:var(--panel); border-radius:10px; padding:4px 8px; }
+  #nextWrap .label { font-size:11px; color:var(--sub); }
+  #nextCanvas { width:40px; height:40px; }
+  #controls { width:100%; max-width:420px; display:flex; gap:8px; }
+  select, button { flex:1; background:var(--panel); color:var(--text); border:1px solid #47426b;
+    border-radius:8px; padding:6px 8px; font-size:14px; cursor:pointer; }
+  button:hover, select:hover, #homeBtn:hover { border-color:var(--accent); }
+  #homeBtn { flex:none; display:flex; align-items:center; background:var(--panel); color:var(--text); border:1px solid #47426b;
+    border-radius:8px; padding:6px 10px; font-size:14px; text-decoration:none; }
+  #stage { position:relative; flex:1; min-height:0; display:flex; justify-content:center; width:100%; }
+  #game { touch-action:none; border-radius:12px; display:block; max-width:100%; }
+  #overlay { position:absolute; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center;
+    gap:12px; background:rgba(15,12,30,.72); border-radius:12px; }
+  #overlay.show { display:flex; }
+  #overlay h2 { margin:0; font-size:32px; }
+  #overlay p { margin:0; color:var(--sub); }
+  #overlay button { flex:none; padding:10px 24px; font-size:16px; background:var(--accent); color:#222; border:none; font-weight:700; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div class="stat"><div class="label">점수</div><div class="value" id="score">0</div></div>
+    <div id="nextWrap"><div class="label">다음</div><canvas id="nextCanvas" width="80" height="80"></canvas></div>
+    <div class="stat"><div class="label">최고점</div><div class="value" id="best">0</div></div>
+  </div>
+  <div id="controls">
+    <a id="homeBtn" href="../../index.html" title="게임 목록">← 목록</a>
+    <select id="themeSelect" aria-label="테마 선택"></select>
+    <button id="restartBtn">다시 시작</button>
+  </div>
+  <div id="stage">
+    <canvas id="game" width="400" height="640"></canvas>
+    <div id="overlay">
+      <h2>게임 오버</h2>
+      <p id="finalScore"></p>
+      <button id="overlayRestart">다시 하기</button>
+    </div>
+  </div>
+</div>
+
+<script>window.THEMES = [];</script>
+<!-- 테마 추가: themes/ 에 파일을 만들고 아래에 script 한 줄 추가 -->
+<script src="themes/default.js"></script>
+<script src="themes/sample-image.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

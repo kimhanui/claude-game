@@ -1,0 +1,11 @@
+# 정적 HTML 게임 모음을 GitLab Pages 로 배포 (빌드 없음, public/ 으로 복사만)
+pages:
+  stage: deploy
+  script:
+    - mkdir -p public
+    - cp -r index.html games.js games public/
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game Arcade</title>
+<style>
+  :root { --bg:#1d1b2e; --panel:#2b2842; --text:#f3f0ff; --sub:#a9a3c9; --line:#47426b; --accent:#ffb84d; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:32px 16px; }
+  h1 { margin:0 0 4px; font-size:28px; }
+  .sub { margin:0 0 20px; color:var(--sub); }
+  #search { width:100%; max-width:320px; margin-bottom:20px; padding:8px 12px; font-size:14px;
+    background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; }
+  #search:focus { outline:none; border-color:var(--accent); }
+  #list { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:16px; }
+  .card { display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    overflow:hidden; color:inherit; text-decoration:none; transition:transform .12s, border-color .12s; }
+  .card:hover, .card:focus-visible { transform:translateY(-3px); border-color:var(--c, var(--accent)); outline:none; }
+  .thumb { height:120px; display:flex; align-items:center; justify-content:center; font-size:56px;
+    background:linear-gradient(135deg, var(--c, #555), #2b2842); }
+  .thumb img { width:100%; height:100%; object-fit:cover; }
+  .body { padding:12px 14px 14px; }
+  .title { font-weight:700; font-size:17px; margin-bottom:4px; }
+  .desc { font-size:13px; color:var(--sub); line-height:1.4; }
+  .empty { color:var(--sub); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Game Arcade</h1>
+  <p class="sub">플레이할 게임 선택</p>
+  <input id="search" type="search" placeholder="게임 검색" aria-label="게임 검색">
+  <div id="list"></div>
+</main>
+<script src="games.js"></script>
+<script>
+  const list = document.getElementById('list');
+  const games = window.GAMES || [];
+  function render(q) {
+    q = (q || '').trim().toLowerCase();
+    list.innerHTML = '';
+    const shown = games.filter(g => !q || (g.title + ' ' + (g.desc || '')).toLowerCase().includes(q));
+    if (!shown.length) { list.innerHTML = '<p class="empty">해당하는 게임 없음</p>'; return; }
+    for (const g of shown) {
+      const a = document.createElement('a');
+      a.className = 'card'; a.href = g.path;
+      if (g.color) a.style.setProperty('--c', g.color);
+      const thumb = document.createElement('div'); thumb.className = 'thumb';
+      if (g.thumb) { const img = document.createElement('img'); img.src = g.thumb; img.alt = ''; thumb.appendChild(img); }
+      else thumb.textContent = g.emoji || '🎮';
+      const body = document.createElement('div'); body.className = 'body';
+      const t = document.createElement('div'); t.className = 'title'; t.textContent = g.title;
+      const d = document.createElement('div'); d.className = 'desc'; d.textContent = g.desc || '';
+      body.append(t, d); a.append(thumb, body); list.appendChild(a);
+    }
+  }
+  document.getElementById('search').addEventListener('input', e => render(e.target.value));
+  render();
+</script>
+</body>
+</html>
