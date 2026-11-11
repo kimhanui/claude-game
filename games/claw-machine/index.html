@@ -29,7 +29,11 @@
     font-size:13px; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
   .chip b { font-size:17px; }
   .chip .lbl { display:none; }
-  #wonChip { cursor:pointer; }
+  /* 눌리는 칩: 강조 테두리 + › 로 라벨 칩(시간·코인)과 구분 */
+  .chip.tap { cursor:pointer; border-color:rgba(255,184,77,.55); padding-right:7px; transition:transform .08s; -webkit-tap-highlight-color:transparent; }
+  .chip.tap::after { content:'›'; margin-left:2px; font-size:17px; line-height:1; color:var(--sub); }
+  .chip.tap:active { transform:scale(.95); }
+  .chip.tap:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
   #menuBtn { margin-left:auto; }
   #top #tools { display:none; flex-wrap:wrap; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:8px; }
   #top.open #tools { display:flex !important; }
@@ -46,7 +50,7 @@
     font-size:16px; font-weight:700; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.9), 0 0 2px rgba(0,0,0,.9); }
   #danmaku .dot { width:9px; height:9px; border-radius:50%; flex:none; box-shadow:0 0 0 2px rgba(0,0,0,.4); }
   body.multi #tools #danmakuBtn, body.multi #tools #rankBtn, body.multi #shareBtn { display:inline-flex !important; }
-  body.multi #tokenChip { display:flex !important; cursor:pointer; }
+  body.multi #tokenChip { display:inline-flex !important; }
   /* 채팅(멀티): 모바일은 💬 버튼으로 입력 줄 열기 */
   #chatBtn { display:none; }
   body.multi #chatBtn { display:inline-flex; margin-left:auto; }
@@ -207,8 +211,8 @@
   <div class="row">
     <a class="btn icon" href="../../index.html" aria-label="게임 목록">←</a>
     <div class="chip single-only"><span class="ico">🪙</span><span class="lbl">코인</span> <b id="coins">10</b></div>
-    <div class="chip multi-only" id="tokenChip" title="오늘 남은 플레이 토큰"><span class="ico">🎫</span><span class="lbl">토큰</span> <b id="tokens">-</b></div>
-    <div class="chip" id="wonChip" title="컬렉션 열기"><span class="ico">🧸</span><span class="lbl">획득(누적)</span> <b id="won">0</b></div>
+    <div class="chip tap multi-only" id="tokenChip" role="button" tabindex="0" title="오늘 남은 플레이 토큰" aria-label="토큰, 눌러서 토큰 받기"><span class="ico">🎫</span><span class="lbl">토큰</span> <b id="tokens">-</b></div>
+    <div class="chip tap" id="wonChip" role="button" tabindex="0" title="컬렉션 열기" aria-label="컬렉션 열기"><span class="ico">🧸</span><span class="lbl">획득(누적)</span> <b id="won">0</b></div>
     <div class="chip"><span class="ico">⏱</span><span class="lbl">시간</span> <b id="timer">-</b></div>
     <button id="chatBtn" class="icon" aria-label="채팅">💬</button>
     <button id="menuBtn" class="icon" aria-label="메뉴" aria-expanded="false" aria-controls="tools">☰</button>

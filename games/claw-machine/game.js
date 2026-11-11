@@ -465,6 +465,7 @@
     db.classList.toggle('alt', role !== 'player');
     db.textContent = role === 'player' ? 'DROP' : qi >= 0 ? `대기 취소\n${qi + 1}번째` : noTokens() ? adLabel : (!presence.player && !presence.queue.length ? '플레이\n하기' : '대기열\n등록');
     $('tokens').textContent = tokens === null ? '-' : tokens;
+    $('tokenChip').setAttribute('aria-label', `토큰 ${tokens ?? '-'}개` + (noTokens() ? ', 눌러서 광고 보고 토큰 받기' : ''));
     db.disabled = role !== 'player' && role !== 'spectator';
     const canControl = role === 'player';
     $('refillBtn').disabled = !canControl;
@@ -1178,6 +1179,10 @@
     $('peopleToggle').setAttribute('aria-expanded', open);
   });
   $('wonChip').addEventListener('click', openCollection);
+  // 눌리는 칩 키보드 조작: 포커스 상태에서 Enter/Space = 클릭 (전역 Space=DROP 으로 전달 안 함)
+  document.querySelectorAll('.chip.tap').forEach(c => c.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); c.click(); }
+  }));
   $('chatBtn').addEventListener('click', () => setChat(!$top.classList.contains('chat')));
   $('chatForm').addEventListener('submit', e => { e.preventDefault(); sendChat(); });
   $chatInput.addEventListener('input', () => { $('chatLeft').textContent = CHAT_MAX - Array.from($chatInput.value).length; });
