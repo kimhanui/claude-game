@@ -77,8 +77,15 @@
   #dropBtn:active { transform:scale(.94); }
   #dropBtn.alt { font-size:14px; line-height:1.2; white-space:pre-line; text-align:center; }
   #msg:empty { display:none !important; }
-  #bag { display:none; }
+  /* 뽑은 인형: 컬렉션을 여는 유일한 진입점 (모바일은 방향 패드 위, PC 는 왼쪽 아래) */
+  #bag { display:block; left:calc(var(--sal) + 12px); bottom:calc(var(--sab) + 14px + var(--key) * 3 + 12px + 8px); max-width:40vw; min-height:0; padding:6px 10px; cursor:pointer; }
+  #bag .bag-h { font-size:12px; color:var(--sub); }
+  #bag .bag-h b { font-size:12px; color:var(--accent); }
+  #bag .items { font-size:18px; letter-spacing:1px; word-break:break-all; }
   /* 줌: 방향 패드와 DROP 사이 세로 버튼 묶음 */
+  /* 배포 버전: 오른쪽 아래 구석, 조작 방해 없음 */
+  #ver { right:calc(var(--sar) + 6px); bottom:calc(var(--sab) + 2px); z-index:1; font-size:10px; line-height:1; color:var(--sub); opacity:.6; pointer-events:none; white-space:nowrap; }
+  #ver:empty { display:none; }
   #zoom { left:calc(var(--sal) + 12px + var(--key) * 3 + 12px + 8px); bottom:calc(var(--sab) + 14px); display:flex; flex-direction:column; gap:6px; }
   #zoom button { width:44px; min-height:44px; padding:0; font-size:20px; border-radius:12px; }
   #zoom #zoomReset { font-size:13px; }
@@ -154,6 +161,34 @@
   #adBar i { display:block; height:100%; width:0; background:var(--accent); }
   #adInfo { padding:10px 14px 14px; font-size:13px; color:var(--sub); text-align:center; }
   #adInfo b { color:var(--text); }
+  /* 구경꾼 예측 내기: 게임을 가리지 않는 작은 카드 (X 로 접으면 알약 버튼만 남음) */
+  #bet, #betPill { left:50%; transform:translateX(-50%); bottom:calc(var(--sab) + 160px); z-index:5; display:none; } /* DROP 버튼 바로 위 */
+  #bet { width:min(360px, calc(100% - 24px)); background:#221f36; border:1px solid var(--accent); border-radius:14px; padding:10px 12px;
+    box-shadow:0 8px 30px rgba(0,0,0,.5); flex-direction:column; gap:8px; }
+  #bet.show, #betPill.show { display:flex; }
+  .bet-head { display:flex; align-items:center; gap:8px; font-size:14px; }
+  .bet-head b { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #betTime { font-size:13px; color:var(--accent); font-weight:700; white-space:nowrap; }
+  #betFold { width:32px; min-height:32px; font-size:15px; }
+  #betPool { display:flex; gap:6px; font-size:12px; color:var(--sub); }
+  #betPool span { flex:1; text-align:center; background:var(--panel); border-radius:8px; padding:4px 0; }
+  #betPool b { color:var(--text); }
+  .bet-row { display:flex; gap:6px; align-items:center; }
+  .bet-row > button { flex:1; font-weight:700; }
+  #betAmtRow { justify-content:center; font-size:13px; color:var(--sub); }
+  #betAmtRow button { flex:none; width:40px; padding:0; font-size:18px; }
+  #betAmt { width:64px; height:40px; text-align:center; font-size:18px; font-weight:800; background:var(--panel); color:var(--text);
+    border:1px solid var(--line); border-radius:10px; font-family:inherit; -moz-appearance:textfield; }
+  #betAmt::-webkit-inner-spin-button, #betAmt::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  #betAmt:focus { outline:none; border-color:var(--accent); }
+  #betSucc { background:rgba(105,219,124,.18); border-color:#69db7c; }
+  #betFail { background:rgba(226,71,91,.18); border-color:var(--hot-line); }
+  #betSkip { flex:none; padding:0 10px; color:var(--sub); }
+  #betStatus { font-size:13px; text-align:center; color:var(--sub); }
+  #betStatus:empty { display:none; }
+  #betStatus b { color:var(--accent); }
+  #bet.done .bet-pick, #bet.closed .bet-pick { display:none; }
+  #betPill { min-height:36px; border-color:var(--accent); font-size:13px; font-weight:700; border-radius:18px; box-shadow:0 4px 14px rgba(0,0,0,.4); }
   #gbForm { display:flex; gap:8px; align-items:center; padding:10px 14px; border-top:1px solid var(--line); }
   #gbInput { flex:1; min-width:0; min-height:44px; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:10px;
     padding:0 12px; font-size:16px; font-family:inherit; user-select:text; -webkit-user-select:text; } /* 16px 미만이면 iOS 가 확대함 */
@@ -183,6 +218,7 @@
     body.multi #top #chatForm { display:flex; position:fixed; left:50%; bottom:56px; transform:translateX(-50%); width:min(380px, 40vw); }
     #toast { font-size:34px; }
     #people { top:108px; width:230px; padding:8px 10px; }
+    #bet, #betPill { bottom:110px; }
     #collection, #guestbook, #rank, #adModal { align-items:center; padding:16px; }
     .coll-panel { max-width:720px; max-height:100%; border-radius:16px; padding-bottom:0; }
     #collGrid { grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); }
@@ -212,7 +248,6 @@
     <a class="btn icon" href="../../index.html" aria-label="게임 목록">←</a>
     <div class="chip single-only"><span class="ico">🪙</span><span class="lbl">코인</span> <b id="coins">10</b></div>
     <div class="chip tap multi-only" id="tokenChip" role="button" tabindex="0" title="오늘 남은 플레이 토큰" aria-label="토큰, 눌러서 토큰 받기"><span class="ico">🎫</span><span class="lbl">토큰</span> <b id="tokens">-</b></div>
-    <div class="chip tap" id="wonChip" role="button" tabindex="0" title="컬렉션 열기" aria-label="컬렉션 열기"><span class="ico">🧸</span><span class="lbl">획득(누적)</span> <b id="won">0</b></div>
     <div class="chip"><span class="ico">⏱</span><span class="lbl">시간</span> <b id="timer">-</b></div>
     <button id="chatBtn" class="icon" aria-label="채팅">💬</button>
     <button id="menuBtn" class="icon" aria-label="메뉴" aria-expanded="false" aria-controls="tools">☰</button>
@@ -226,7 +261,6 @@
     </select>
     <button id="viewBtn">시점 전환 (C)</button>
     <button id="refillBtn">인형 채우기</button>
-    <button id="collBtn">컬렉션 (B)</button>
     <button id="rankBtn" class="multi-only">🏆 오늘 랭킹 (R)</button>
     <button id="danmakuBtn" class="multi-only">흐르는 채팅: 켜짐</button>
   </div>
@@ -239,13 +273,26 @@
 <div id="msg" class="hud">방향키로 이동, DROP 으로 내리기</div>
 <div id="toast" class="hud">GET!</div>
 <div id="danmaku" class="hud" aria-hidden="true"></div>
-<div id="bag" class="hud chip"><div style="font-size:12px;color:var(--sub)">뽑은 인형</div><div class="items" id="bagItems">-</div></div>
+<div id="bag" class="hud chip" role="button" tabindex="0" aria-label="뽑은 인형 보기"><div class="bag-h">뽑은 인형 (<b id="won">0</b>)</div><div class="items" id="bagItems">-</div></div>
 <div id="dpad" class="hud" aria-label="집게 이동">
   <span></span><button data-dir="up" aria-label="위">▲</button><span></span>
   <button data-dir="left" aria-label="왼쪽">◀</button><span></span><button data-dir="right" aria-label="오른쪽">▶</button>
   <span></span><button data-dir="down" aria-label="아래">▼</button><span></span>
 </div>
 <button id="dropBtn" class="hud">DROP</button>
+<div id="ver" class="hud" aria-label="배포 버전"></div>
+<div id="bet" class="hud" role="dialog" aria-labelledby="betTitle">
+  <div class="bet-head"><b id="betTitle">🎲 뽑기 예측</b><span id="betTime"></span><button id="betFold" class="icon" aria-label="접기 (다시 열 수 있음)">✕</button></div>
+  <div id="betPool"><span>성공 <b id="betSuccN">0</b>명 · <b id="betSuccSum">0</b>🎫</span><span>실패 <b id="betFailN">0</b>명 · <b id="betFailSum">0</b>🎫</span></div>
+  <div class="bet-row bet-pick" id="betAmtRow">
+    <button id="betMinus" aria-label="1개 줄이기">－</button><input id="betAmt" type="number" min="1" max="10" value="1" inputmode="numeric" aria-label="걸 토큰 수"><button id="betPlus" aria-label="1개 늘리기">＋</button><span>🎫</span>
+  </div>
+  <div class="bet-row bet-pick">
+    <button id="betSucc">성공에 걸기</button><button id="betFail">실패에 걸기</button><button id="betSkip">SKIP</button>
+  </div>
+  <div id="betStatus"></div>
+</div>
+<button id="betPill" class="hud" aria-label="예측 내기 다시 열기">🎲 내기 <span id="betPillTime"></span></button>
 <div id="zoom" class="hud" aria-label="화면 확대·축소">
   <button id="zoomIn" aria-label="확대">＋</button>
   <button id="zoomReset" aria-label="원래 크기">1:1</button>
@@ -255,7 +302,7 @@
   <button id="peopleToggle" aria-expanded="false" aria-controls="peopleList"><span>접속 <b id="peopleCount">0</b>명 · <b id="meName">-</b></span><span class="caret">▴</span></button>
   <ul id="peopleList"></ul>
 </div>
-<div id="help" class="hud">←↑↓→ / WASD 이동 · Space 내리기 · C 시점 전환 · 휠/+− 줌 · Enter 채팅 · B 컬렉션 · G 방명록 · R 랭킹</div>
+<div id="help" class="hud">←↑↓→ / WASD 이동 · Space 내리기 · C 시점 전환 · 휠/+− 줌 · Enter 채팅 · B 뽑은 인형 · G 방명록 · R 랭킹</div>
 
 <div id="collection" role="dialog" aria-modal="true" aria-labelledby="collTitle">
   <div class="coll-panel">

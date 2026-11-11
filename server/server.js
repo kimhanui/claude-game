@@ -20,6 +20,10 @@ const GB_KEEP = 200, GB_SEND = 200, GB_MAX_LEN = 100, GB_INTERVAL_MS = 5000; // 
 const FREE_TOKENS = 5, AD_REWARD = 1, AD_DAILY_MAX = 10;
 const AD_WAIT_MS = Number(process.env.AD_WAIT_MS) || 15000; // 광고(대기 화면) 최소 시청 시간
 const RANK_TOP = 10;
+// 구경꾼 예측 내기: 플레이어 차례 시작 ~ DROP(또는 조준 시간 종료) 전까지 성공/실패 중 한쪽에 토큰을 검
+// 적중자끼리 전체 판돈을 1/n 균등 분배 (나머지는 먼저 건 순서대로 1개씩), 적중자가 없거나 판이 무효면 전액 환불
+const BET_MAX = 10;
+const BET_WINDOW_MS = Number(process.env.BET_WINDOW_MS) || 21500; // 조준 20초 + 여유. DROP 신호가 없을 때의 마감 안전장치
 // 인형 종류: games/claw-machine/game.js 의 KINDS 순서와 동일하게 유지
 const KIND_INFO = [['🧸', '곰'], ['🐰', '토끼'], ['🐱', '고양이'], ['🐥', '병아리'], ['💧', '젤리']];
 
@@ -66,10 +70,31 @@ function issueUid(req, res) {
   res.setHeader('Set-Cookie', `${UID_COOKIE}=${crypto.randomBytes(24).toString('hex')}; Path=/; Max-Age=${UID_MAX_AGE}; HttpOnly; SameSite=Lax${https ? '; Secure' : ''}`);
 }
 
+// ================= 배포 버전 (KST 날짜·시간) =================
+// Render 빌드 시 postinstall 이 기록한 build.json → 없으면(로컬) 게임·서버 파일 중 가장 늦은 수정 시각
+function buildTime() {
+  try { const t = JSON.parse(fs.readFileSync(path.join(__dirname, 'build.json'), 'utf8')).t; if (Number.isFinite(t)) return t; } catch (e) { /* 없음 */ }
+  let t = 0;
+  for (const f of ['server/server.js', 'server/store.js', 'games/claw-machine/game.js', 'games/claw-machine/index.html', 'games/claw-machine/net.js']) {
+    try { t = Math.max(t, fs.statSync(path.join(ROOT, f)).mtimeMs); } catch (e) { /* 없음 */ }
+  }
+  return Math.floor(t) || Date.now();
+}
+const VERSION = (() => {
+  const t = buildTime();
+  const d = new Date(t + 9 * 3600e3).toISOString(); // KST
+  return { t, label: `${d.slice(0, 10).replace(/-/g, '.')} ${d.slice(11, 16)}`, commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) };
+})();
+
 const server = http.createServer((req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
   issueUid(req, res);
-  const share = /^\/u\/([0-9a-f]{10})\/?$/.exec((req.url || '').split('?')[0]);
+  const pathname = (req.url || '').split('?')[0];
+  if (pathname === '/version.json') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+    return res.end(JSON.stringify(VERSION));
+  }
+  const share = /^\/u\/([0-9a-f]{10})\/?$/.exec(pathname);
   if (share) return serveSharePage(share[1], res);
   serveStatic(req, res);
 });
@@ -154,6 +179,8 @@ let queue = [];            // user[] (대기 순서)
 let player = null;         // 현재 차례 user
 let turnTimer = null;
 let snapshot = null;       // 최신 기계 상태 (차례 클라이언트가 보낸 것)
+let bet = null;            // 진행 중 내기 { round, playerId, playerName, open, closeAt, timer, entries: Map(id -> {side, amount}) }
+let betRound = 0;
 
 const pub = u => ({ id: u.id, name: u.name, color: u.color });
 const send = (ws, msg) => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); };
@@ -178,6 +205,63 @@ function cleanText(t, max = GB_MAX_LEN) {
 // 차례가 끝나면 들려 있던 인형은 놓은 상태로 정리
 function dropHeld() { if (snapshot) for (const a of snapshot.p) a[7] = 0; }
 
+// ================= 구경꾼 예측 내기 =================
+const BET_SIDES = ['succ', 'fail'];
+function betPool() {
+  const pool = { succ: { n: 0, sum: 0 }, fail: { n: 0, sum: 0 } };
+  if (bet) for (const e of bet.entries.values()) { pool[e.side].n++; pool[e.side].sum += e.amount; }
+  return pool;
+}
+const betOpenMsg = () => ({ t: 'bet_open', round: bet.round, player: bet.playerId, name: bet.playerName, closesInMs: Math.max(0, bet.closeAt - Date.now()), max: BET_MAX, pool: betPool() });
+function openBet(u) {
+  if (bet) settleBet('void');
+  bet = { round: ++betRound, playerId: u.id, playerName: u.name, open: true, closeAt: Date.now() + BET_WINDOW_MS, entries: new Map() };
+  bet.timer = setTimeout(closeBet, BET_WINDOW_MS);
+  broadcast(betOpenMsg(), u);
+}
+function closeBet() {
+  if (!bet || !bet.open) return;
+  bet.open = false; clearTimeout(bet.timer);
+  broadcast({ t: 'bet_close', round: bet.round, pool: betPool() });
+}
+function placeBet(u, m) {
+  const reject = reason => send(u.ws, { t: 'bet_reject', round: m.round, reason });
+  if (!bet || bet.round !== m.round || !bet.open) return reject('내기 마감');
+  if (bet.playerId === u.id) return reject('내 차례에는 참여 불가');
+  if (bet.entries.has(u.id)) return reject('이미 참여함');
+  if (!BET_SIDES.includes(m.side)) return reject('성공/실패 선택 필요');
+  const st = statOf(u);
+  const amount = m.amount;
+  if (!Number.isInteger(amount) || amount < 1 || amount > BET_MAX) return reject(`1~${BET_MAX}개만 가능`);
+  if (amount > st.tokens) return reject('토큰 부족');
+  st.tokens -= amount; saveStat(u); sendTokens(u);
+  bet.entries.set(u.id, { side: m.side, amount });
+  send(u.ws, { t: 'bet_ok', round: bet.round, side: m.side, amount });
+  broadcast({ t: 'bet_pool', round: bet.round, pool: betPool() });
+}
+// outcome: 'succ' | 'fail' | 'void'(플레이어 이탈·응답 없음 → 환불)
+function settleBet(outcome) {
+  if (!bet) return;
+  const b = bet; bet = null;
+  clearTimeout(b.timer);
+  const all = [...b.entries.entries()]; // 건 순서 유지
+  const pool = all.reduce((a, [, e]) => a + e.amount, 0);
+  const winners = outcome === 'void' ? [] : all.filter(([, e]) => e.side === outcome);
+  const refund = !winners.length;
+  const share = refund ? 0 : Math.floor(pool / winners.length), rem = refund ? 0 : pool % winners.length;
+  const payout = new Map();
+  if (refund) for (const [id, e] of all) payout.set(id, e.amount);
+  else winners.forEach(([id], i) => payout.set(id, share + (i < rem ? 1 : 0)));
+  for (const [id, n] of payout) { const s = stats.get(id); if (s && n > 0) { s.tokens += n; store.saveUser(id, s); } }
+  const base = { t: 'bet_result', round: b.round, outcome, name: b.playerName, pool, bettors: all.length, winners: winners.length, share, refund };
+  for (const u of users.values()) {
+    const e = b.entries.get(u.id);
+    send(u.ws, e ? { ...base, mine: { side: e.side, amount: e.amount, payout: payout.get(u.id) || 0 } } : base);
+    if (payout.has(u.id)) sendTokens(u);
+  }
+  if (all.length) log(`bet #${b.round} ${outcome} pool ${pool} bettors ${all.length} winners ${winners.length}`);
+}
+
 function startNextTurn() {
   if (player) return false;
   // 차례 시작 시 토큰 1개 차감. 토큰이 없는 대기자는 건너뜀
@@ -190,13 +274,16 @@ function startNextTurn() {
   }
   if (!player) return false;
   clearTimeout(turnTimer);
-  turnTimer = setTimeout(() => { log(`timeout ${player && player.name}`); endTurn(); }, TURN_LIMIT_MS);
+  turnTimer = setTimeout(() => { log(`timeout ${player && player.name}`); endTurn('void'); }, TURN_LIMIT_MS);
   broadcast({ t: 'turn', player: player.id, snapshot });
+  openBet(player);
   log(`turn -> ${player.name}`);
   return true;
 }
 
-function endTurn() {
+// outcome: 정상 종료면 'fail'(GET 이 있었으면 이미 'succ' 로 정산됨), 시간 초과·이탈이면 'void'
+function endTurn(outcome = 'fail') {
+  settleBet(outcome);
   clearTimeout(turnTimer); turnTimer = null;
   player = null;
   dropHeld();
@@ -209,7 +296,7 @@ function removeUser(u) {
   users.delete(u.sid);
   queue = queue.filter(q => q !== u);
   log(`leave ${u.name} (${users.size})`);
-  if (player === u) endTurn(); else broadcastPresence();
+  if (player === u) endTurn('void'); else broadcastPresence();
 }
 
 function log(t) { console.log(new Date().toISOString().slice(11, 19), t); }
@@ -239,6 +326,7 @@ wss.on('connection', (ws, req) => {
       log(`join ${me.name} (${users.size})`);
       send(ws, { ...presenceMsg(), t: 'welcome', you: pub(me), snapshot, guestbook: guestbook.slice(-GB_SEND) });
       sendTokens(me);
+      if (bet && bet.open && bet.playerId !== me.id) send(ws, betOpenMsg());
       broadcastPresence();
       return;
     }
@@ -292,7 +380,14 @@ wss.on('connection', (ws, req) => {
           const st = statOf(me);
           st.total++; st.kinds[m.kind]++; st.dayWins++; st.lastWinAt = Date.now(); saveStat(me);
           broadcast({ t: 'event', type: 'get', by: me.name, byId: me.id, kind: m.kind, color: m.color }, me);
+          if (bet && bet.playerId === me.id) { closeBet(); settleBet('succ'); }
         }
+        break;
+      case 'drop': // 플레이어가 집게를 내림 → 내기 마감
+        if (player === me) closeBet();
+        break;
+      case 'bet':
+        placeBet(me, m);
         break;
       case 'gb_post': {
         const text = cleanText(m.text);
@@ -339,7 +434,7 @@ store.loadAll().then(data => {
   guestbook = (data.guestbook || []).filter(e => e && typeof e.text === 'string').slice(-GB_KEEP);
   server.listen(PORT, '0.0.0.0', () => {
     const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
-    console.log(`Claw Drop 서버 실행: 포트 ${PORT} (저장소: ${store.mode}, 유저 기록 ${stats.size}건)`);
+    console.log(`Claw Drop 서버 실행: 포트 ${PORT} (저장소: ${store.mode}, 유저 기록 ${stats.size}건, 버전 ${VERSION.label})`);
     for (const ip of ['localhost', ...ips]) console.log(`  http://${ip}:${PORT}/games/claw-machine/`);
   });
 });

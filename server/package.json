@@ -4,7 +4,8 @@
   "description": "Claw Drop 3D 멀티 유저 중계 서버 (정적 파일 + WebSocket)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "node -e \"if(process.env.RENDER)require('fs').writeFileSync('build.json',JSON.stringify({t:Date.now()}))\""
   },
   "dependencies": {
     "ws": "^8.18.0"

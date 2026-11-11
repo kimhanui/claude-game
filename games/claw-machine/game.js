@@ -406,6 +406,8 @@
     if (prizes.length < 10) refill();
     keys.clear();
     startAim();
+    if (bet && !bet.mine) bet = null; // 내 차례: 이전 내기 카드 정리 (참여한 내기는 결과까지 유지)
+    renderBet();
     toast('내 차례!');
     sendState();
     updateNetUi();
@@ -512,6 +514,7 @@
         break;
       case 'replaced': // 같은 브라우저의 다른 탭이 접속 → 이 탭은 구경도 종료
         closeAd(false); closeRank();
+        bet = null; renderBet();
         if (role === 'player') becomeSpectator();
         role = 'replaced';
         presence = { users: [], queue: [], player: null };
@@ -523,6 +526,7 @@
       case 'tokens':
         tokens = m.tokens; adLeft = m.adLeft; adMax = m.adMax || adMax;
         updateAdInfo();
+        if (bet) renderBet();
         updateNetUi();
         break;
       case 'need_token':
@@ -544,6 +548,9 @@
         break;
       case 'event':
         if (m.type === 'get' && KINDS[m.kind]) toast(`GET! ${KINDS[m.kind].emoji} ${m.by}`);
+        break;
+      case 'bet_open': case 'bet_ok': case 'bet_reject': case 'bet_pool': case 'bet_close': case 'bet_result':
+        onBetMessage(m);
         break;
     }
   }
@@ -900,6 +907,7 @@
   function drop() {
     if (!simulating() || st.phase !== 'aim' || noCoins()) return;
     if (role === 'single') coins--;
+    if (role === 'player' && conn) conn.send({ t: 'drop' }); // 구경꾼 내기 마감
     st.phase = 'drop';
     // 집게 아래에서 가장 높은 표면까지 내려감
     let surface = 0;
@@ -1094,6 +1102,104 @@
     $('rankMe').innerHTML = my.rank ? `내 순위 <b>${my.rank}위</b> · 오늘 <b>${my.wins}</b>개` : `오늘 <b>${my.wins || 0}</b>개 · 하나 뽑으면 랭킹 등록`;
   }
 
+  // ================= 구경꾼 예측 내기 (플레이어 DROP 전까지 성공/실패 중 한쪽에 토큰) =================
+  const $bet = $('bet'), $betPill = $('betPill'), $betAmt = $('betAmt');
+  const SIDE_TEXT = { succ: '성공', fail: '실패' };
+  let bet = null;      // { round, name, open, closeAt, max, pool, mine, skipped, folded, result }
+  let betTick = null, betHideT = null;
+  function betAmount() {
+    const max = Math.max(1, Math.min(bet ? bet.max : 10, tokens || 0));
+    const v = Math.max(1, Math.min(max, Math.floor(Number($betAmt.value) || 1)));
+    return { v, max };
+  }
+  function renderBet() {
+    clearTimeout(betHideT);
+    const show = !!bet && !bet.skipped && role !== 'player' && (bet.open || bet.mine || bet.result);
+    $bet.classList.toggle('show', show && !bet.folded);
+    $betPill.classList.toggle('show', show && bet.folded);
+    if (!show) { clearInterval(betTick); betTick = null; return; }
+    $('betTitle').textContent = `🎲 ${bet.name} 뽑기 예측`;
+    const p = bet.pool || {};
+    $('betSuccN').textContent = p.succ ? p.succ.n : 0; $('betSuccSum').textContent = p.succ ? p.succ.sum : 0;
+    $('betFailN').textContent = p.fail ? p.fail.n : 0; $('betFailSum').textContent = p.fail ? p.fail.sum : 0;
+    $bet.classList.toggle('done', !!bet.mine || !!bet.result);
+    $bet.classList.toggle('closed', !bet.open);
+    const { v, max } = betAmount();
+    $betAmt.max = max;
+    if (document.activeElement !== $betAmt) $betAmt.value = v;
+    const broke = !tokens;
+    $('betSucc').disabled = $('betFail').disabled = broke || !bet.open;
+    let status = '';
+    if (bet.result) status = bet.result;
+    else if (bet.mine) status = `<b>${SIDE_TEXT[bet.mine.side]}</b>에 ${bet.mine.amount}🎫 걸었음 · ${bet.open ? 'DROP 후 마감' : '마감, 결과 대기'}`;
+    else if (broke) status = '토큰이 없어 참여 불가';
+    else status = '맞히면 전체 판돈을 적중자끼리 1/n';
+    $('betStatus').innerHTML = status;
+    updateBetTime();
+    if (bet.open && !betTick) betTick = setInterval(updateBetTime, 250);
+    if (!bet.open && betTick) { clearInterval(betTick); betTick = null; }
+  }
+  function updateBetTime() {
+    if (!bet) return;
+    const left = Math.max(0, Math.ceil((bet.closeAt - performance.now()) / 1000));
+    const t = bet.result ? '결과' : bet.open ? `마감 ${left}초` : '마감';
+    $('betTime').textContent = t;
+    $('betPillTime').textContent = bet.result ? '결과' : bet.mine ? (bet.open ? `${left}초 · 참여` : '결과 대기') : `${left}초`;
+  }
+  function placeBet(side) {
+    if (!bet || !bet.open || bet.mine || !conn) return;
+    conn.send({ t: 'bet', round: bet.round, side, amount: betAmount().v });
+  }
+  function betResultText(m) {
+    const mine = m.mine;
+    if (m.outcome === 'void') return `판 무효 (플레이어 이탈) → <b>${mine.amount}🎫</b> 환불`;
+    const res = `${m.name} 뽑기 <b>${SIDE_TEXT[m.outcome]}</b>`;
+    if (m.refund) return `${res} · 적중자 없음 → <b>${mine.amount}🎫</b> 환불`;
+    if (mine.side === m.outcome) return `${res} · 예측 적중! <b>+${mine.payout}🎫</b> (판돈 ${m.pool} ÷ ${m.winners}명)`;
+    return `${res} · 예측 실패 <b>-${mine.amount}🎫</b>`;
+  }
+  function onBetMessage(m) {
+    switch (m.t) {
+      case 'bet_open':
+        bet = { round: m.round, name: m.name, open: true, closeAt: performance.now() + (m.closesInMs || 0), max: m.max || 10, pool: m.pool, mine: null, skipped: false, folded: false, result: null };
+        $betAmt.value = 1;
+        break;
+      case 'bet_ok':
+        if (bet && bet.round === m.round) bet.mine = { side: m.side, amount: m.amount };
+        toast(`${SIDE_TEXT[m.side]}에 ${m.amount}🎫`);
+        break;
+      case 'bet_reject':
+        toast(m.reason || '참여 실패');
+        break;
+      case 'bet_pool':
+      case 'bet_close':
+        if (!bet || bet.round !== m.round) return;
+        bet.pool = m.pool;
+        if (m.t === 'bet_close') bet.open = false;
+        break;
+      case 'bet_result':
+        if (!bet || bet.round !== m.round) return;
+        bet.open = false;
+        if (!m.mine) { bet = null; break; }
+        bet.result = betResultText(m);
+        bet.folded = false;
+        toast(m.outcome !== 'void' && !m.refund && m.mine.side === m.outcome ? `예측 적중 +${m.mine.payout}🎫` : m.outcome === 'void' || m.refund ? '내기 환불' : '예측 실패');
+        renderBet();
+        betHideT = setTimeout(() => { if (bet && bet.round === m.round) { bet = null; renderBet(); } }, 4000);
+        return;
+    }
+    renderBet();
+  }
+  $('betSucc').addEventListener('click', () => placeBet('succ'));
+  $('betFail').addEventListener('click', () => placeBet('fail'));
+  $('betSkip').addEventListener('click', () => { if (bet) { bet.skipped = true; renderBet(); } });
+  $('betFold').addEventListener('click', () => { if (bet) { bet.folded = true; renderBet(); } });
+  $betPill.addEventListener('click', () => { if (bet) { bet.folded = false; renderBet(); } });
+  $('betMinus').addEventListener('click', () => { $betAmt.value = betAmount().v - 1; $betAmt.value = betAmount().v; });
+  $('betPlus').addEventListener('click', () => { $betAmt.value = betAmount().v + 1; $betAmt.value = betAmount().v; });
+  $betAmt.addEventListener('change', () => { $betAmt.value = betAmount().v; });
+  $betAmt.addEventListener('keydown', e => { if (e.key === 'Escape') $betAmt.blur(); });
+
   // ================= 자랑하기 (내 기록 페이지 링크 공유) =================
   async function shareLink() {
     if (!me) return;
@@ -1112,6 +1218,7 @@
     if (adOpen()) { if (e.key === 'Escape') closeAd(true); return; } // 광고 중 게임 조작 차단
     if (rankOpen()) { if (e.key === 'Escape' || e.key.toLowerCase() === 'r') closeRank(); return; }
     if (e.target === $chatInput) { if (e.key === 'Escape') setChat(false); return; } // 채팅 입력 중 게임 조작 차단
+    if (e.target && e.target.closest && e.target.closest('#bet')) return; // 내기 카드 버튼·입력에 포커스: 게임 조작 차단
     const tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
     if (e.key === 'Enter' && me && !collOpen()) { e.preventDefault(); setChat(true); return; }
@@ -1178,15 +1285,13 @@
     const open = $('people').classList.toggle('open');
     $('peopleToggle').setAttribute('aria-expanded', open);
   });
-  $('wonChip').addEventListener('click', openCollection);
   // 눌리는 칩 키보드 조작: 포커스 상태에서 Enter/Space = 클릭 (전역 Space=DROP 으로 전달 안 함)
-  document.querySelectorAll('.chip.tap').forEach(c => c.addEventListener('keydown', e => {
+  document.querySelectorAll('.chip.tap, #bag').forEach(c => c.addEventListener('keydown', e => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); c.click(); }
   }));
   $('chatBtn').addEventListener('click', () => setChat(!$top.classList.contains('chat')));
   $('chatForm').addEventListener('submit', e => { e.preventDefault(); sendChat(); });
   $chatInput.addEventListener('input', () => { $('chatLeft').textContent = CHAT_MAX - Array.from($chatInput.value).length; });
-  $('collBtn').addEventListener('click', openCollection);
   $('bag').addEventListener('click', openCollection);
   $('collClose').addEventListener('click', closeCollection);
   $coll.addEventListener('click', e => { if (e.target === $coll) closeCollection(); });
@@ -1374,6 +1479,16 @@
     startAim();
   }
   requestAnimationFrame(loop);
+
+  // 배포 버전 표시 (서버 /version.json, 서버 없는 환경은 표시 안 함)
+  if (typeof location !== 'undefined' && /^https?:$/.test(location.protocol) && typeof fetch === 'function') {
+    fetch('/version.json', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(v => {
+      if (!v || !v.label) return;
+      const el = $('ver');
+      el.textContent = `v${v.label}`;
+      el.title = v.commit ? `배포 ${v.label} (KST) · ${v.commit}` : `배포 ${v.label} (KST)`;
+    }).catch(() => { /* 버전 없음 */ });
+  }
 
   // 테스트용 노출
   window.ClawGame = { st, get prizes() { return prizes; }, physics, updateClaw, drop, collectFallen, get won() { return sessionWon; }, get collection() { return collection; }, openCollection, closeCollection,
