@@ -7,7 +7,8 @@
 <title>버스킹</title>
 <style>
   /* 해 질 녘 광장: 남색 하늘 + 가로등 호박색. 모바일 퍼스트 */
-  :root { --ink:rgba(32,28,60,.76); --line:rgba(255,214,150,.30); --text:#fff4e2; --sub:#d8c7b0; --amber:#ffc65c; --low:#7fb3ff; --mid:#ffc65c; --high:#ff8fb1;
+  :root { --ink:rgba(32,28,60,.76); --line:rgba(255,214,150,.30); --text:#fff4e2; --sub:#d8c7b0; --amber:#ffc65c; --low:#7fb3ff; --mid:#ffc65c; --high:#ff8fb1; --sing:#7dffb2;
+    --grad:linear-gradient(100deg, #ffc65c, #ff7aa8 55%, #a98bff);
     --sat:env(safe-area-inset-top, 0px); --sab:env(safe-area-inset-bottom, 0px); --sal:env(safe-area-inset-left, 0px); --sar:env(safe-area-inset-right, 0px); }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { margin:0; height:100%; overflow:hidden; background:#2e2b63; color:var(--text); overscroll-behavior:none;
@@ -16,17 +17,27 @@
   .hud { position:fixed; z-index:2; }
   a.btn, button { background:var(--ink); color:var(--text); border:1px solid var(--line); border-radius:12px; min-height:40px; padding:0 12px;
     font-size:14px; cursor:pointer; text-decoration:none; font-family:inherit; display:inline-flex; align-items:center; justify-content:center; touch-action:manipulation; }
-  a.btn:focus-visible, button:focus-visible { outline:2px solid var(--amber); outline-offset:2px; }
-  .icon { width:40px; padding:0; font-size:18px; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  a.btn:focus-visible, button:focus-visible, input:focus-visible { outline:2px solid var(--amber); outline-offset:2px; }
+  .icon { width:40px; padding:0; font-size:18px; position:relative; }
 
-  #top { top:calc(var(--sat) + 10px); left:calc(var(--sal) + 10px); right:calc(var(--sar) + 10px); display:flex; gap:8px; align-items:center; pointer-events:none; }
+  #top { top:calc(var(--sat) + 10px); left:calc(var(--sal) + 10px); right:calc(var(--sar) + 10px); display:flex; gap:6px; align-items:center; pointer-events:none; flex-wrap:wrap; }
   #top > * { pointer-events:auto; }
-  .chip { background:var(--ink); border:1px solid var(--line); border-radius:999px; min-height:40px; padding:0 14px; display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--sub); white-space:nowrap; }
-  #crowd b { font-size:20px; color:var(--text); font-variant-numeric:tabular-nums; }
-  #state .dot { width:9px; height:9px; border-radius:50%; background:#6f6a8f; transition:background .2s, box-shadow .2s; }
-  body.playing #state .dot { background:var(--amber); box-shadow:0 0 10px var(--amber); }
-  body.playing #state { color:var(--text); }
-  #right { margin-left:auto; display:flex; gap:8px; }
+  .chip { background:var(--ink); border:1px solid var(--line); border-radius:999px; min-height:40px; padding:0 12px; display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--sub); white-space:nowrap; }
+  .chip b { font-size:16px; color:var(--text); font-variant-numeric:tabular-nums; }
+  button.chip { font-size:13px; }
+  #crowd .dot { width:9px; height:9px; border-radius:50%; background:#6f6a8f; transition:background .2s, box-shadow .2s; }
+  body.playing #crowd .dot { background:var(--amber); box-shadow:0 0 10px var(--amber); }
+  #stateT { color:var(--sub); }
+  #right { margin-left:auto; display:flex; gap:6px; }
+  #locName { position:fixed; z-index:2; top:calc(var(--sat) + 58px); left:calc(var(--sal) + 12px); font-size:12px; color:var(--sub); text-shadow:0 1px 3px rgba(0,0,0,.6); pointer-events:none; }
+  .badge { position:absolute; top:-5px; right:-5px; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#ff3b6b; color:#fff; font-size:11px; font-weight:800; font-style:normal; display:flex; align-items:center; justify-content:center; }
+  .badge[hidden] { display:none; }
+
+  #toasts { position:fixed; z-index:6; top:calc(var(--sat) + 84px); left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none; width:max-content; max-width:calc(100% - 24px); }
+  .toast { background:rgba(24,20,44,.92); border:1px solid var(--line); border-radius:14px; padding:8px 14px; font-size:13px; line-height:1.4; text-align:center; animation:tin .25s ease-out; transition:opacity .4s, transform .4s; }
+  .toast.out { opacity:0; transform:translateY(-6px); }
+  @keyframes tin { from { opacity:0; transform:translateY(-8px); } }
 
   /* 데스크톱: 키보드 배치 그대로 보여주는 키캡 */
   #keys { bottom:calc(var(--sab) + 14px); left:50%; transform:translateX(-50%); display:flex; flex-direction:column; gap:5px; pointer-events:none;
@@ -38,28 +49,117 @@
     display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1.1; transition:transform .06s, background .1s; }
   .cap .k { font-size:10px; color:var(--sub); }
   .cap .n { font-size:12px; font-weight:700; }
+  .cap.sing { width:auto; margin:2px 70px 0 60px; flex-direction:row; gap:8px; }
   .cap.on { background:var(--c); color:#2a2240; transform:translateY(2px); }
   .cap.on .k { color:#2a2240; }
 
-  /* 터치 기기: 가운데 옥타브 10음 패드 */
-  #pads { display:none; bottom:calc(var(--sab) + 10px); left:calc(var(--sal) + 10px); right:calc(var(--sar) + 10px);
-    grid-template-columns:repeat(5, 1fr); gap:8px; }
-  .pad { min-height:58px; border-radius:14px; font-size:17px; font-weight:700; border-bottom:4px solid var(--c); touch-action:none; }
+  /* 터치 기기: 가운데 옥타브 10음 패드 + 노래 버튼 */
+  #pads { display:none; bottom:calc(var(--sab) + 10px); left:calc(var(--sal) + 10px); right:calc(var(--sar) + 10px); grid-template-columns:repeat(5, 1fr); gap:7px; }
+  .pad { min-height:52px; border-radius:14px; font-size:17px; font-weight:700; border-bottom:4px solid var(--c); touch-action:none; }
+  .pad.singpad { grid-column:1 / -1; min-height:44px; font-size:15px; }
   .pad.on { background:var(--c); color:#2a2240; }
   @media (pointer:coarse) { #keys { display:none; } #pads { display:grid; } }
+  body.phone-open #keys { opacity:.35; }
 
-  #intro { position:fixed; inset:0; z-index:5; display:flex; align-items:center; justify-content:center; padding:20px;
-    background:radial-gradient(ellipse at 50% 70%, rgba(255,170,90,.25), rgba(30,26,60,.82) 70%); }
-  #intro[hidden] { display:none; }
-  .card { max-width:400px; width:100%; background:rgba(32,28,60,.9); border:1px solid var(--line); border-radius:20px; padding:26px 24px 22px; }
-  .card h1 { margin:0 0 14px; font-size:34px; letter-spacing:-.5px; }
+  #intro, #fade { position:fixed; inset:0; z-index:8; display:flex; align-items:center; justify-content:center; padding:20px;
+    background:radial-gradient(ellipse at 50% 70%, rgba(255,170,90,.25), rgba(30,26,60,.86) 70%); }
+  #intro[hidden], #fade[hidden], #phone[hidden] { display:none; }
+  .card { max-width:420px; width:100%; max-height:calc(100% - 20px); overflow:auto; background:rgba(32,28,60,.92); border:1px solid var(--line); border-radius:20px; padding:24px 22px 20px; }
+  .card h1 { margin:0 0 12px; font-size:34px; letter-spacing:-.5px; }
   .card p { word-break:keep-all; margin:0 0 10px; font-size:15px; line-height:1.6; color:var(--sub); }
-  .card ul { margin:14px 0 20px; padding:0; list-style:none; font-size:14px; line-height:1.9; }
+  .card ul { margin:12px 0 16px; padding:0; list-style:none; font-size:14px; line-height:1.9; word-break:keep-all; }
   .card li span { display:inline-block; min-width:72px; padding:0 8px; margin-right:8px; border-radius:6px; text-align:center; font-weight:700; color:#2a2240; }
-  .card button { width:100%; min-height:48px; font-size:16px; font-weight:700; background:var(--amber); color:#2a2240; border:none; }
+  .card #startBtn { width:100%; min-height:48px; font-size:16px; font-weight:700; background:var(--amber); color:#2a2240; border:none; }
+  .card #micBtn { width:100%; margin:0 0 10px; }
+  .card #micBtn.on { border-color:var(--sing); color:var(--sing); }
   .card .tip { font-size:12px; margin:12px 0 0; }
   @media (pointer:coarse) { .desk { display:none; } }
   @media (pointer:fine) { .touch { display:none; } }
+  #fade { opacity:0; transition:opacity .45s; background:#140f26; }
+  #fade.on { opacity:1; }
+  #fade p { font-size:20px; font-weight:700; animation:bus 1.2s ease-in-out infinite alternate; }
+  @keyframes bus { from { transform:translateX(-14px); } to { transform:translateX(14px); } }
+
+  /* ───── 내 스마트폰 ───── */
+  #phone { position:fixed; z-index:7; right:calc(var(--sar) + 16px); top:calc(var(--sat) + 60px); bottom:calc(var(--sab) + 16px); width:min(380px, calc(100% - 32px)); display:flex; }
+  .ph-frame { flex:1; display:flex; flex-direction:column; background:#0f0d16; border:8px solid #1a1722; border-radius:34px; overflow:hidden; box-shadow:0 18px 60px rgba(0,0,0,.55); color:#f5f2fa; user-select:text; -webkit-user-select:text; }
+  .ph-status { display:flex; justify-content:space-between; padding:8px 20px 4px; font-size:12px; font-weight:700; color:#cfc8de; }
+  #phScreen { flex:1; overflow-y:auto; overscroll-behavior:contain; background:#0f0d16; }
+  .ph-nav { display:flex; justify-content:space-around; padding:6px 10px 8px; background:#0f0d16; border-top:1px solid #241f30; }
+  .ph-nav button { background:none; border:none; color:#cfc8de; min-width:56px; }
+  @media (max-width:560px) { #phone { inset:calc(var(--sat) + 4px) calc(var(--sar) + 4px) calc(var(--sab) + 4px) calc(var(--sal) + 4px); width:auto; } .ph-frame { border-width:5px; border-radius:26px; } }
+
+  .ph-home { min-height:100%; padding:18px 16px; background:radial-gradient(circle at 20% 0%, #5b3a7a, transparent 60%), radial-gradient(circle at 90% 100%, #8a4a3a, transparent 55%), #1b1630; }
+  .widget { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.12); border-radius:22px; padding:16px; backdrop-filter:blur(6px); }
+  .w-title { font-size:22px; font-weight:800; background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .w-handle { font-size:13px; color:#cfc8de; margin:2px 0 12px; }
+  .w-row { display:flex; gap:8px; } .w-stat { flex:1; background:rgba(0,0,0,.25); border-radius:12px; padding:8px 10px; font-size:14px; font-weight:700; }
+  .w-goal { font-size:12px; color:#cfc8de; margin:12px 0 6px; }
+  .bar { height:8px; border-radius:4px; background:rgba(255,255,255,.12); overflow:hidden; } .bar i { display:block; height:100%; background:var(--grad); border-radius:4px; }
+  .apps { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; margin-top:22px; }
+  .app { flex-direction:column; gap:6px; background:none; border:none; min-height:auto; padding:0; }
+  .app .ic { position:relative; width:62px; height:62px; border-radius:18px; display:flex; align-items:center; justify-content:center; font-size:30px; background:#2c2540; box-shadow:inset 0 0 0 1px rgba(255,255,255,.1); }
+  .app[data-app="sns"] .ic { background:var(--grad); }
+  .app .nm { font-size:12px; color:#efeaf7; }
+
+  .sns-head { position:sticky; top:0; z-index:1; background:rgba(15,13,22,.96); padding:10px 14px 0; border-bottom:1px solid #241f30; }
+  .logo { font-size:24px; font-weight:900; font-style:italic; letter-spacing:-.5px; background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; display:inline-block; padding-right:4px; }
+  .logo.plain { font-style:normal; }
+  .wallet { float:right; font-size:14px; font-weight:700; margin-top:6px; }
+  .tabs { display:flex; margin-top:8px; }
+  .tabs button { flex:1; background:none; border:none; border-bottom:2px solid transparent; border-radius:0; color:#9a92ad; font-weight:700; }
+  .tabs button.on { color:#fff; border-bottom-color:#ff7aa8; }
+  .empty, .uploading { padding:28px 22px; color:#9a92ad; font-size:14px; line-height:1.6; text-align:center; word-break:keep-all; }
+  .uploading { padding:10px; font-size:12px; color:#ffc65c; border-bottom:1px solid #241f30; }
+  .post { border-bottom:1px solid #241f30; padding-bottom:10px; }
+  .p-top { display:flex; align-items:center; gap:10px; padding:10px 12px; }
+  .av { width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; color:#1a1430; box-shadow:0 0 0 2px #0f0d16, 0 0 0 4px #ff7aa8; flex:none; }
+  .av.big { width:72px; height:72px; font-size:34px; background:#2c2540; }
+  .who { display:flex; flex-direction:column; line-height:1.25; } .who b { font-size:13px; } .who small { font-size:11px; color:#9a92ad; }
+  .hot { margin-left:auto; font-size:11px; font-weight:800; color:#ffb35c; }
+  .media { position:relative; background:#000; width:100%; aspect-ratio:9 / 14; max-height:62vh; display:flex; align-items:center; justify-content:center; overflow:hidden; cursor:pointer; }
+  .media video, .media img { width:100%; height:100%; object-fit:cover; display:block; }
+  .media .play { position:absolute; width:58px; height:58px; border-radius:50%; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; font-size:22px; pointer-events:none; }
+  .media.playing .play { display:none; }
+  .media .nov, .media.expired::after { position:absolute; bottom:8px; left:8px; font-size:11px; background:rgba(0,0,0,.55); padding:3px 8px; border-radius:8px; }
+  .media.expired::after { content:'영상이 기기에 남아 있지 않아요'; }
+  .acts { display:flex; align-items:center; gap:4px; padding:6px 8px 0; }
+  .acts button { background:none; border:none; font-size:24px; min-height:40px; min-width:40px; padding:0; color:#fff; }
+  .acts .like.on { color:#ff3b6b; } .acts .like.pop { transform:scale(1.3); transition:transform .15s; }
+  .likes { font-size:13px; font-weight:800; margin-left:4px; }
+  .caption, .cm { margin:4px 12px; font-size:13px; line-height:1.45; white-space:pre-wrap; word-break:break-word; }
+  .cm b, .caption b { font-weight:800; } .cm.me b { color:#ffc65c; }
+  .more { background:none; border:none; color:#9a92ad; font-size:12px; min-height:28px; padding:0 12px; }
+  .more[hidden] { display:none; }
+  .cform { display:flex; gap:6px; padding:6px 12px 0; }
+  .cform input { flex:1; min-width:0; min-height:36px; background:#1c1828; color:#fff; border:1px solid #2c2540; border-radius:18px; padding:0 12px; font-size:13px; font-family:inherit; }
+  .cform button { background:none; border:none; color:#ff7aa8; font-weight:800; min-height:36px; padding:0 6px; }
+  .profile { padding:16px 14px 30px; }
+  .pf-top { display:flex; align-items:center; gap:18px; }
+  .pf-stats { flex:1; display:flex; justify-content:space-around; text-align:center; }
+  .pf-stats b { display:block; font-size:18px; } .pf-stats small { font-size:12px; color:#9a92ad; }
+  .pf-name { margin:12px 0 8px; display:flex; flex-direction:column; } .pf-name small { color:#ffc65c; font-weight:700; margin-top:2px; }
+  .ghost { background:#1c1828; border-color:#2c2540; min-height:34px; font-size:13px; }
+  .pf-note { font-size:12px; color:#9a92ad; line-height:1.6; word-break:keep-all; }
+  .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:2px; margin:12px -14px 18px; }
+  .cell { position:relative; padding:0; border:none; border-radius:0; aspect-ratio:9 / 14; background:#000; overflow:hidden; }
+  .cell img { width:100%; height:100%; object-fit:cover; } .cell span { position:absolute; top:4px; right:4px; }
+  .danger { width:100%; background:none; border-color:#4a2433; color:#ff7a8f; font-size:13px; }
+  .shop, .bus { padding:10px 12px 24px; display:flex; flex-direction:column; gap:10px; }
+  .item, .stop { background:#1a1626; border:1px solid #2a2438; border-radius:16px; padding:12px; }
+  .item { display:flex; align-items:center; gap:12px; }
+  .item .ic { font-size:28px; width:48px; height:48px; border-radius:14px; background:#2a2438; display:flex; align-items:center; justify-content:center; flex:none; }
+  .item .info { flex:1; display:flex; flex-direction:column; gap:3px; min-width:0; } .item small { font-size:12px; color:#9a92ad; line-height:1.4; word-break:keep-all; }
+  .buy { background:#ffc65c; color:#2a2240; border:none; font-weight:800; white-space:nowrap; }
+  .wear { background:#2c2540; border-color:#3b3352; white-space:nowrap; }
+  .worn { background:none; border-color:#3b3352; color:#9a92ad; white-space:nowrap; }
+  .stop .st-top { display:flex; align-items:center; gap:10px; font-size:16px; } .stop .ic { font-size:26px; }
+  .stop p { margin:8px 0; font-size:13px; color:#b7aec9; line-height:1.5; word-break:keep-all; }
+  .perks { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; } .perks span { font-size:11px; padding:3px 8px; border-radius:8px; background:#2a2438; color:#e7e0f3; }
+  .stop button { width:100%; }
+  .stop.here { border-color:#ffc65c; }
+  @media (max-width:560px) { #stateT, #viewBtn, .lbl { display:none; } .chip { padding:0 10px; } }
+  @media (prefers-reduced-motion: reduce) { .toast, #fade p { animation:none; } }
 </style>
 </head>
 <body>
@@ -67,35 +167,57 @@
 
 <div id="top" class="hud">
   <a class="btn icon" href="../../index.html" aria-label="게임 목록">←</a>
-  <div class="chip" id="crowd">듣는 사람 <b id="crowdN">0</b></div>
-  <div class="chip" id="state"><span class="dot"></span><span id="stateT">쉬는 중</span></div>
+  <div class="chip" id="crowd" title="듣는 사람"><span class="dot"></span>👥 <b id="crowdN">0</b> <span id="stateT">쉬는 중</span></div>
+  <button class="chip" id="moneyChip" title="상점 열기">💰 <b id="moneyT">0원</b></button>
+  <button class="chip" id="folChip" title="내 프로필">⭐ <span class="lbl">팔로워</span> <b id="folT">0</b></button>
   <div id="right">
+    <button class="icon" id="phoneBtn" aria-label="내 스마트폰">📱<em class="badge" id="phoneBadge" hidden>0</em></button>
     <button class="icon" id="viewBtn" aria-label="시점 초기화" title="시점 초기화">↺</button>
     <button class="icon" id="helpBtn" aria-label="조작법">?</button>
   </div>
 </div>
+<div id="locName"></div>
+<div id="toasts" aria-live="polite"></div>
 
 <div id="keys" class="hud" aria-hidden="true"></div>
 <div id="pads" class="hud"></div>
 
+<div id="phone" hidden>
+  <div class="ph-frame" role="dialog" aria-label="내 스마트폰">
+    <div class="ph-status"><span id="phClock"></span><span>📶 🔋</span></div>
+    <div id="phScreen"></div>
+    <div class="ph-nav">
+      <button id="phBack" aria-label="뒤로">◀</button>
+      <button id="phHome" aria-label="홈 화면">●</button>
+      <button id="phClose" aria-label="폰 닫기">✕</button>
+    </div>
+  </div>
+</div>
+
+<div id="fade" hidden><p></p></div>
+
 <div id="intro">
   <div class="card">
     <h1>버스킹</h1>
-    <p>해 질 녘 광장, 기타를 메고 섰어요. 사람들은 바쁘게 지나가요.</p>
-    <p>키를 누를 때마다 기타가 한 음씩 울려요. 계속 연주하면 지나가던 사람이 하나둘 멈춰 서서 들어요.</p>
+    <p>해 질 녘 광장, 기타를 메고 섰어요. 연주하고 노래해서 지나가는 사람을 붙잡아 보세요.</p>
+    <p>핸드폰 든 관객은 내 공연을 찍어 버스타그램에 올려요. 영상이 퍼지면 팔로워가 늘어요. 공연이 끝나면 케이스에 팁이 들어오고, 그 돈으로 악기와 옷을 사거나 버스를 타고 더 큰 무대로 갈 수 있어요. 목표는 팔로워 100만!</p>
     <ul class="desk">
       <li><span style="background:var(--high)">Q ~ P</span>높은 도레미</li>
       <li><span style="background:var(--mid)">A ~ ;</span>가운데 도레미</li>
       <li><span style="background:var(--low)">Z ~ /</span>낮은 도레미</li>
+      <li><span style="background:var(--sing)">Space</span>꾹 누르는 동안 노래 (치는 음을 따라 불러요)</li>
+      <li><span style="background:#cfc8de">📱</span>내 폰: 버스타그램, 상점, 버스</li>
     </ul>
-    <ul class="touch"><li>아래 패드를 눌러 연주해요.</li></ul>
-    <button id="startBtn">연주 시작</button>
-    <p class="tip desk">한/영 상태와 상관없이 연주돼요. 화면을 끌면 시점이 돌아가고, 휠로 확대해요.</p>
-    <p class="tip touch">화면을 끌면 시점이 돌아가요.</p>
+    <ul class="touch"><li>아래 패드로 연주하고, 🎤 버튼을 누르고 있으면 노래해요. 📱 버튼으로 내 폰을 열어요.</li></ul>
+    <button id="micBtn" type="button">🎙️ 마이크로 직접 노래하기</button>
+    <button id="startBtn" type="button">공연 시작</button>
+    <p class="tip desk">한/영 상태와 상관없이 연주돼요. 화면을 끌면 시점이 돌아가고, 휠로 확대해요. 진행 상황은 이 브라우저에 저장돼요.</p>
+    <p class="tip touch">화면을 끌면 시점이 돌아가요. 진행 상황은 이 브라우저에 저장돼요.</p>
   </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="data.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

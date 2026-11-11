@@ -39,4 +39,4 @@ HTML 게임 모음. 루트 `index.html` 을 열면 게임 목록에서 선택해
 ## 게임 목록
 - `games/merge-drop` : 낙하 머지 퍼즐 (테마로 애셋 교체 가능, 상세는 폴더 내 README)
 - `games/claw-machine` : 탑다운 3D 인형뽑기 (three.js r128 CDN 사용, 인터넷 연결 필요, `server/` 로 멀티 구경)
-- `games/busking` : 3인칭 버스킹 (three.js r128 CDN). 키 하나 = 기타 한 음, 연주하면 행인이 멈춰 듣는다. 상세는 폴더 내 README
+- `games/busking` : 3인칭 버스킹 (three.js r128 CDN). 키 하나 = 한 음, Space 노래, 팁·상점·버스 이동, 관객이 찍은 영상이 SNS(버스타그램)에 올라 팔로워가 늘어남. 진행은 브라우저에 저장. 상세는 폴더 내 README
