@@ -19,4 +19,12 @@ window.GAMES = [
     color: '#ff5d8f',
     emoji: '🧸',
   },
+  {
+    id: 'busking',
+    title: '버스킹',
+    desc: '해 질 녘 광장에서 기타 연주. 계속 치면 지나가던 사람이 하나둘 멈춰 듣는다',
+    path: 'games/busking/index.html',
+    color: '#ffc65c',
+    emoji: '🎸',
+  },
 ];
