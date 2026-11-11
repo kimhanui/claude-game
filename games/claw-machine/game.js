@@ -457,12 +457,9 @@
     $('peopleCount').textContent = presence.users.length;
     $('meName').textContent = me.name;
     $('meName').style.color = me.color;
-    const btn = $('queueBtn');
     const qi = presence.queue.indexOf(me.id);
-    btn.disabled = role === 'player' || role === 'offline' || role === 'replaced';
     document.body.classList.toggle('myturn', role === 'player'); // 내 차례: 흐르는 채팅 흐리게
     const adLabel = adLeft > 0 ? '광고 보고\n토큰 받기' : '토큰 소진\n0시 충전';
-    btn.textContent = role === 'player' ? '내 차례 (1판)' : qi >= 0 ? `대기 취소 (${qi + 1}번째)` : noTokens() ? adLabel.replace('\n', ' ') : (!presence.player && !presence.queue.length ? '플레이하기' : '대기열 등록');
     // DROP 버튼 겸용: 구경 중에는 플레이하기·대기열 등록·대기 취소, 내 차례에는 DROP
     const db = $('dropBtn');
     db.classList.toggle('alt', role !== 'player');
@@ -1212,7 +1209,6 @@
   $('adClose').addEventListener('click', () => closeAd(true));
   $('tokenChip').addEventListener('click', () => { if (noTokens()) openAd(); else toast(`토큰 ${tokens ?? '-'}개 · 1판에 1개`); });
   $('shareBtn').addEventListener('click', shareLink);
-  $('queueBtn').addEventListener('click', e => { e.currentTarget.blur(); if (noTokens()) openAd(); else toggleQueue(false); });
   $('gbClose').addEventListener('click', closeGuestbook);
   $gb.addEventListener('click', e => { if (e.target === $gb) closeGuestbook(); });
   $('gbForm').addEventListener('submit', e => { e.preventDefault(); postGuestbook(); });
