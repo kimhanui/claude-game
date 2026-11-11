@@ -343,6 +343,9 @@
   let role = NET ? 'connecting' : 'single';
   let conn = null, me = null;
   let presence = { users: [], queue: [], player: null };
+  // 토큰(멀티 전용, 서버 관리): 하루 무료 5개 + 광고 보상
+  let tokens = null, adLeft = 0, adMax = 10;
+  const noTokens = () => role === 'spectator' && tokens !== null && tokens <= 0 && !(me && presence.queue.includes(me.id));
   const clawTarget = { x: st.x, y: st.y, z: st.z, open: st.open };
   const simulating = () => role === 'single' || role === 'player';
   const noCoins = () => role === 'single' && coins <= 0;
@@ -458,11 +461,13 @@
     const qi = presence.queue.indexOf(me.id);
     btn.disabled = role === 'player' || role === 'offline' || role === 'replaced';
     document.body.classList.toggle('myturn', role === 'player'); // 내 차례: 흐르는 채팅 흐리게
-    btn.textContent = role === 'player' ? '내 차례 (1판)' : qi >= 0 ? `대기 취소 (${qi + 1}번째)` : (!presence.player && !presence.queue.length ? '플레이하기' : '대기열 등록');
+    const adLabel = adLeft > 0 ? '광고 보고\n토큰 받기' : '토큰 소진\n0시 충전';
+    btn.textContent = role === 'player' ? '내 차례 (1판)' : qi >= 0 ? `대기 취소 (${qi + 1}번째)` : noTokens() ? adLabel.replace('\n', ' ') : (!presence.player && !presence.queue.length ? '플레이하기' : '대기열 등록');
     // DROP 버튼 겸용: 구경 중에는 플레이하기·대기열 등록·대기 취소, 내 차례에는 DROP
     const db = $('dropBtn');
     db.classList.toggle('alt', role !== 'player');
-    db.textContent = role === 'player' ? 'DROP' : qi >= 0 ? `대기 취소\n${qi + 1}번째` : (!presence.player && !presence.queue.length ? '플레이\n하기' : '대기열\n등록');
+    db.textContent = role === 'player' ? 'DROP' : qi >= 0 ? `대기 취소\n${qi + 1}번째` : noTokens() ? adLabel : (!presence.player && !presence.queue.length ? '플레이\n하기' : '대기열\n등록');
+    $('tokens').textContent = tokens === null ? '-' : tokens;
     db.disabled = role !== 'player' && role !== 'spectator';
     const canControl = role === 'player';
     $('refillBtn').disabled = !canControl;
@@ -508,6 +513,7 @@
         if (typeof m.text === 'string') { showBubble(m.id, m.text); addDanmaku(m.id, m.text); }
         break;
       case 'replaced': // 같은 브라우저의 다른 탭이 접속 → 이 탭은 구경도 종료
+        closeAd(false); closeRank();
         if (role === 'player') becomeSpectator();
         role = 'replaced';
         presence = { users: [], queue: [], player: null };
@@ -515,6 +521,28 @@
         break;
       case 'gb_reject':
         toast(m.reason || '등록 실패');
+        break;
+      case 'tokens':
+        tokens = m.tokens; adLeft = m.adLeft; adMax = m.adMax || adMax;
+        updateAdInfo();
+        updateNetUi();
+        break;
+      case 'need_token':
+        toast('토큰 없음 🎫');
+        break;
+      case 'ad_ok':
+        startAdCountdown(m.waitMs || 15000);
+        break;
+      case 'ad_done':
+        closeAd(false);
+        toast(`+${m.reward || 1} 토큰 🎫`);
+        break;
+      case 'ad_reject':
+        closeAd(false);
+        toast(m.reason || '광고 보상 실패');
+        break;
+      case 'rank':
+        renderRank(m);
         break;
       case 'event':
         if (m.type === 'get' && KINDS[m.kind]) toast(`GET! ${KINDS[m.kind].emoji} ${m.by}`);
@@ -999,15 +1027,98 @@
     prizes = keep;
   }
 
+  // ================= 광고 보고 토큰 받기 (지금은 자체 대기 화면, AdSense 승인 후 #adSlot 에 광고 삽입) =================
+  const $ad = $('adModal');
+  const adOpen = () => $ad.classList.contains('show');
+  let adTimer = null, adEnd = 0, adWait = 15000;
+  function updateAdInfo() {
+    $('adInfo').innerHTML = `끝까지 보면 토큰 1개 · 오늘 남은 광고 보상 <b>${adLeft}</b>/${adMax}회`;
+  }
+  function openAd() {
+    if (!conn || !me) return;
+    if (adLeft <= 0) { toast('0시에 충전'); return; }
+    keys.clear();
+    clearInterval(adTimer); adTimer = null;
+    $('adCount').textContent = '준비 중...';
+    $('adBar').firstElementChild.style.width = '0%';
+    updateAdInfo();
+    $ad.classList.add('show');
+    conn.send({ t: 'ad_start' });
+  }
+  function tickAd() {
+    const left = Math.max(0, adEnd - performance.now());
+    $('adCount').textContent = left > 0 ? `${Math.ceil(left / 1000)}초` : '지급 중...';
+    $('adBar').firstElementChild.style.width = `${(1 - left / adWait) * 100}%`;
+    if (left <= 0) { clearInterval(adTimer); adTimer = null; if (conn) conn.send({ t: 'ad_claim' }); }
+  }
+  function startAdCountdown(waitMs) {
+    if (!adOpen()) return;
+    adWait = waitMs; adEnd = performance.now() + waitMs;
+    clearInterval(adTimer); adTimer = setInterval(tickAd, 200); tickAd();
+  }
+  // cancel: 시청 도중 닫음 → 보상 없음
+  function closeAd(cancel) {
+    if (adTimer) { clearInterval(adTimer); adTimer = null; if (cancel && conn) conn.send({ t: 'ad_cancel' }); }
+    $ad.classList.remove('show');
+  }
+
+  // ================= 오늘 랭킹 =================
+  const $rank = $('rank');
+  const rankOpen = () => $rank.classList.contains('show');
+  const MEDALS = ['🥇', '🥈', '🥉'];
+  function openRank() {
+    if (!conn || !me) return;
+    keys.clear();
+    $('rankList').innerHTML = '<li class="empty">불러오는 중...</li>';
+    $('rankMe').textContent = '';
+    $rank.classList.add('show');
+    conn.send({ t: 'rank_get' });
+  }
+  function closeRank() { $rank.classList.remove('show'); }
+  function renderRank(m) {
+    const [, mm, dd] = String(m.day || '').split('-');
+    $('rankDay').textContent = mm ? `${Number(mm)}/${Number(dd)}` : '';
+    const list = $('rankList');
+    list.innerHTML = '';
+    const top = Array.isArray(m.top) ? m.top : [];
+    if (!top.length) list.innerHTML = '<li class="empty">아직 오늘 뽑은 사람 없음</li>';
+    top.forEach((r, i) => {
+      const li = document.createElement('li');
+      if (me && r.id === me.id) li.className = 'me';
+      const rk = document.createElement('span'); rk.className = 'rk'; rk.textContent = MEDALS[i] || i + 1;
+      const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = r.color;
+      const nm = document.createElement('span'); nm.className = 'rn'; nm.textContent = r.name + (me && r.id === me.id ? ' (나)' : '');
+      const w = document.createElement('span'); w.className = 'rw'; w.textContent = `${r.wins}개`;
+      li.append(rk, dot, nm, w);
+      list.appendChild(li);
+    });
+    const my = m.me || {};
+    $('rankMe').innerHTML = my.rank ? `내 순위 <b>${my.rank}위</b> · 오늘 <b>${my.wins}</b>개` : `오늘 <b>${my.wins || 0}</b>개 · 하나 뽑으면 랭킹 등록`;
+  }
+
+  // ================= 자랑하기 (내 기록 페이지 링크 공유) =================
+  async function shareLink() {
+    if (!me) return;
+    const url = `${location.origin}/u/${me.id}`;
+    try {
+      if (navigator.share) { await navigator.share({ title: 'Claw Drop 3D', text: `${me.name} 님의 인형뽑기 기록`, url }); return; }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    try { await navigator.clipboard.writeText(url); toast('링크 복사됨'); }
+    catch (e) { window.prompt('링크 복사', url); }
+  }
+
   // ================= 입력 =================
   const KEYMAP = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', a: 'left', d: 'right', w: 'up', s: 'down' };
   window.addEventListener('keydown', e => {
     if (gbOpen()) { if (e.key === 'Escape') closeGuestbook(); return; } // 방명록 입력 중 게임 조작 차단
+    if (adOpen()) { if (e.key === 'Escape') closeAd(true); return; } // 광고 중 게임 조작 차단
+    if (rankOpen()) { if (e.key === 'Escape' || e.key.toLowerCase() === 'r') closeRank(); return; }
     if (e.target === $chatInput) { if (e.key === 'Escape') setChat(false); return; } // 채팅 입력 중 게임 조작 차단
     const tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
     if (e.key === 'Enter' && me && !collOpen()) { e.preventDefault(); setChat(true); return; }
     if (e.key.toLowerCase() === 'g' && !collOpen()) { e.preventDefault(); openGuestbook(); return; }
+    if (e.key.toLowerCase() === 'r' && me && !collOpen()) { e.preventDefault(); openRank(); return; }
     if (e.key.toLowerCase() === 'b') { collOpen() ? closeCollection() : openCollection(); return; }
     if (collOpen()) { if (e.key === 'Escape') closeCollection(); return; } // 팝업 중 게임 조작 차단
     const k = KEYMAP[e.key] || KEYMAP[e.key.toLowerCase()];
@@ -1091,9 +1202,17 @@
     conn.send({ t: inQueue ? 'queue_leave' : 'queue_join' });
   }
   function dropAction(fromKey) {
-    if (simulating()) drop(); else toggleQueue(fromKey);
+    if (simulating()) drop();
+    else if (noTokens()) openAd(); // 토큰 소진: 광고 보고 받기
+    else toggleQueue(fromKey);
   }
-  $('queueBtn').addEventListener('click', e => { e.currentTarget.blur(); toggleQueue(false); });
+  $('rankBtn').addEventListener('click', openRank);
+  $('rankClose').addEventListener('click', closeRank);
+  $rank.addEventListener('click', e => { if (e.target === $rank) closeRank(); });
+  $('adClose').addEventListener('click', () => closeAd(true));
+  $('tokenChip').addEventListener('click', () => { if (noTokens()) openAd(); else toast(`토큰 ${tokens ?? '-'}개 · 1판에 1개`); });
+  $('shareBtn').addEventListener('click', shareLink);
+  $('queueBtn').addEventListener('click', e => { e.currentTarget.blur(); if (noTokens()) openAd(); else toggleQueue(false); });
   $('gbClose').addEventListener('click', closeGuestbook);
   $gb.addEventListener('click', e => { if (e.target === $gb) closeGuestbook(); });
   $('gbForm').addEventListener('submit', e => { e.preventDefault(); postGuestbook(); });
@@ -1242,6 +1361,7 @@
         startAim();
       },
       onDisconnect: () => {
+        closeAd(false);
         if (role === 'player') becomeSpectator();
         role = 'offline';
         presence = { users: [], queue: [], player: null };
@@ -1256,5 +1376,6 @@
 
   // 테스트용 노출
   window.ClawGame = { st, get prizes() { return prizes; }, physics, updateClaw, drop, collectFallen, get won() { return sessionWon; }, get collection() { return collection; }, openCollection, closeCollection,
-    exportSnapshot, applySnapshot, get role() { return role; }, get guestbook() { return guestbook; }, get gbUnread() { return gbUnread; }, openGuestbook, closeGuestbook };
+    exportSnapshot, applySnapshot, get role() { return role; }, get guestbook() { return guestbook; }, get gbUnread() { return gbUnread; }, openGuestbook, closeGuestbook,
+    get tokens() { return tokens; }, dropAction, openRank, closeRank, openAd, closeAd, shareLink };
 })();

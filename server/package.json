@@ -3,6 +3,13 @@
   "private": true,
   "description": "Claw Drop 3D 멀티 유저 중계 서버 (정적 파일 + WebSocket)",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "dependencies": { "ws": "^8.18.0" }
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
 }
