@@ -49,17 +49,25 @@
     display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1.1; transition:transform .06s, background .1s; }
   .cap .k { font-size:10px; color:var(--sub); }
   .cap .n { font-size:12px; font-weight:700; }
-  .cap.sing { width:auto; margin:2px 70px 0 60px; flex-direction:row; gap:8px; }
+  #keys .row.extra { padding-left:24px; margin-top:2px; }
+  .cap.sing { width:auto; flex:1; padding:0 10px; flex-direction:row; gap:8px; position:relative; overflow:hidden; white-space:nowrap; }
+  .lvl { position:absolute; left:0; bottom:0; height:3px; width:0; background:#fff; opacity:.9; transition:width .06s linear; pointer-events:none; }
   .cap.on { background:var(--c); color:#2a2240; transform:translateY(2px); }
   .cap.on .k { color:#2a2240; }
 
   /* 터치 기기: 가운데 옥타브 10음 패드 + 노래 버튼 */
   #pads { display:none; bottom:calc(var(--sab) + 10px); left:calc(var(--sal) + 10px); right:calc(var(--sar) + 10px); grid-template-columns:repeat(5, 1fr); gap:7px; }
   .pad { min-height:52px; border-radius:14px; font-size:17px; font-weight:700; border-bottom:4px solid var(--c); touch-action:none; }
-  .pad.singpad { grid-column:1 / -1; min-height:44px; font-size:15px; }
+  .pad.singpad { grid-column:span 3; min-height:44px; font-size:15px; position:relative; overflow:hidden; }
+  .pad.handpad { grid-column:span 2; min-height:44px; font-size:15px; }
   .pad.on { background:var(--c); color:#2a2240; }
   @media (pointer:coarse) { #keys { display:none; } #pads { display:grid; } }
   body.phone-open #keys { opacity:.35; }
+  #hook { position:fixed; z-index:2; left:50%; transform:translateX(-50%); bottom:calc(var(--sab) + 214px); max-width:calc(100% - 24px); text-align:center;
+    background:var(--ink); border:1px solid var(--line); border-radius:999px; padding:7px 14px; font-size:13px; pointer-events:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #hook[hidden] { display:none; }
+  #hook.hot { background:linear-gradient(100deg, #ff7a3d, #ff3b8b); border-color:transparent; font-weight:800; font-size:15px; }
+  @media (pointer:coarse) { #hook { bottom:calc(var(--sab) + 190px); white-space:normal; } }
 
   #intro, #fade { position:fixed; inset:0; z-index:8; display:flex; align-items:center; justify-content:center; padding:20px;
     background:radial-gradient(ellipse at 50% 70%, rgba(255,170,90,.25), rgba(30,26,60,.86) 70%); }
@@ -70,8 +78,6 @@
   .card ul { margin:12px 0 16px; padding:0; list-style:none; font-size:14px; line-height:1.9; word-break:keep-all; }
   .card li span { display:inline-block; min-width:72px; padding:0 8px; margin-right:8px; border-radius:6px; text-align:center; font-weight:700; color:#2a2240; }
   .card #startBtn { width:100%; min-height:48px; font-size:16px; font-weight:700; background:var(--amber); color:#2a2240; border:none; }
-  .card #micBtn { width:100%; margin:0 0 10px; }
-  .card #micBtn.on { border-color:var(--sing); color:var(--sing); }
   .card .tip { font-size:12px; margin:12px 0 0; }
   @media (pointer:coarse) { .desk { display:none; } }
   @media (pointer:fine) { .touch { display:none; } }
@@ -181,6 +187,7 @@
 
 <div id="keys" class="hud" aria-hidden="true"></div>
 <div id="pads" class="hud"></div>
+<div id="hook" hidden aria-live="polite"></div>
 
 <div id="phone" hidden>
   <div class="ph-frame" role="dialog" aria-label="내 스마트폰">
@@ -205,11 +212,13 @@
       <li><span style="background:var(--high)">Q ~ P</span>높은 도레미</li>
       <li><span style="background:var(--mid)">A ~ ;</span>가운데 도레미</li>
       <li><span style="background:var(--low)">Z ~ /</span>낮은 도레미</li>
-      <li><span style="background:var(--sing)">Space</span>꾹 누르는 동안 노래 (치는 음을 따라 불러요)</li>
+      <li><span style="background:var(--sing)">Space</span>누르는 동안 마이크가 켜져요. 소리 내어 노래하세요</li>
+      <li><span style="background:#ffb35c">Enter</span>누르는 동안 관객이 외운 후렴을 불러요</li>
       <li><span style="background:#cfc8de">📱</span>내 폰: 버스타그램, 상점, 버스</li>
     </ul>
-    <ul class="touch"><li>아래 패드로 연주하고, 🎤 버튼을 누르고 있으면 노래해요. 📱 버튼으로 내 폰을 열어요.</li></ul>
-    <button id="micBtn" type="button">🎙️ 마이크로 직접 노래하기</button>
+    <ul class="touch"><li>아래 패드로 연주하고, 🎤 버튼을 누르고 있는 동안 마이크가 켜져요. 📣 버튼을 누르고 있으면 관객이 외운 후렴을 불러요. 📱 버튼으로 내 폰을 열어요.</li></ul>
+    <p class="tip">같은 멜로디(4~6음)를 3번 반복하면 관객이 후렴으로 외워요. 관객이 5명 이상일 때 그 후렴을 다시 치면 다 같이 따라 부르는 떼창이 터져요.</p>
+    <p class="tip">처음 노래할 때 마이크 권한을 허용해 주세요(https 주소 필요). 이어폰을 쓰면 기타 소리가 마이크에 섞이지 않아요. 마이크를 쓸 수 없으면 합성 목소리로 대신 불러요.</p>
     <button id="startBtn" type="button">공연 시작</button>
     <p class="tip desk">한/영 상태와 상관없이 연주돼요. 화면을 끌면 시점이 돌아가고, 휠로 확대해요. 진행 상황은 이 브라우저에 저장돼요.</p>
     <p class="tip touch">화면을 끌면 시점이 돌아가요. 진행 상황은 이 브라우저에 저장돼요.</p>

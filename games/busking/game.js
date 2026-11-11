@@ -32,7 +32,14 @@ const CFG = {
   clipSize: [270, 480],  // 세로 영상 해상도
   clipFps: 20,
   maxPosts: 40,
-  micThreshold: 0.035,   // 마이크 소리 크기(RMS)가 이 이상이면 노래 중
+  micThreshold: 0.03,    // 마이크 소리 크기(RMS)가 이 이상이면 노래 중
+  micIdleRelease: 15,    // Space를 뗀 뒤 이 시간(초) 지나면 마이크 장치를 닫음
+  // 떼창: 같은 멜로디(후렴)를 반복하면 관객이 외우고 따라 부름 (악기로 친 음 기준)
+  hookMin: 4, hookMax: 6, // 후렴 길이(음 개수)
+  hookRepeats: 3,         // 이만큼 반복하면 듣던 관객이 외움
+  hookWindow: 90,         // 이 시간(초) 안에 친 음만 비교
+  choirMinCrowd: 5,       // 듣는 사람이 이 이상이어야 떼창
+  hookLock: 20,           // 외운 후렴을 이 시간(초) 안에 쳤으면 새 후렴을 안 익힘 (긴 멜로디의 다른 구간으로 계속 바뀌는 것 방지)
 };
 
 /* ───────── 저장 (진행 상황 localStorage, 영상 IndexedDB) ───────── */
@@ -574,6 +581,38 @@ function playCoin(bill) {
   });
 }
 
+// 떼창: 합성 목소리 여러 개를 음정·타이밍을 살짝 흐트려 합창처럼
+const foldChoir = (m) => { while (m > 71) m -= 12; while (m < 55) m += 12; return m; };
+function choirNote(midi, count, dur, solo, kid, drunk) {
+  if (!ensureAudio()) return;
+  const t0 = actx.currentTime, base = foldChoir(midi);
+  const out = actx.createGain(); out.gain.value = Math.min(0.55, 0.13 * Math.sqrt(count)) * (solo ? 1.25 : 1);
+  const mix = actx.createGain();
+  [[800, 6, 1], [1150, 8, 0.5], [2900, 10, 0.2]].forEach(([fr, q, gv]) => {
+    const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = fr; bp.Q.value = q;
+    const g = actx.createGain(); g.gain.value = gv * 3;
+    mix.connect(bp); bp.connect(g); g.connect(out);
+  });
+  out.connect(master);
+  const voices = clamp(Math.round(2 + count * 0.5), 3, 7);
+  for (let i = 0; i < voices; i++) {
+    const st = t0 + Math.random() * 0.045, o = actx.createOscillator(), g = actx.createGain();
+    o.type = 'sawtooth';
+    o.frequency.value = midiHz(base + (kid && i === 0 ? 12 : 0));         // 아이는 한 옥타브 위
+    o.detune.value = rand(-14, 14) + (drunk && i === 1 ? rand(-50, 50) : 0); // 취객은 음이탈
+    g.gain.setValueAtTime(0.0001, st); g.gain.exponentialRampToValueAtTime(0.22, st + 0.05);
+    g.gain.setValueAtTime(0.22, st + dur); g.gain.exponentialRampToValueAtTime(0.0001, st + dur + 0.25);
+    o.connect(g); g.connect(mix); o.start(st); o.stop(st + dur + 0.3);
+  }
+}
+function playHowl() {
+  if (!actx) return;
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  o.type = 'sine'; o.frequency.setValueAtTime(560, t); o.frequency.linearRampToValueAtTime(880, t + 0.35); o.frequency.linearRampToValueAtTime(700, t + 1.0);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.06, t + 0.1); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.05);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + 1.1);
+}
+
 // 노래(Space·🎤 버튼): 마지막으로 친 음을 따라 "아~" 하는 목소리 합성
 let voice = null, voiceMidi = 60;
 const midiHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
@@ -613,33 +652,59 @@ function voiceStop() {
   [v.o1, v.o2, v.lfo].forEach((o) => o.stop(t + 0.22));
 }
 
-// 마이크로 직접 노래하기(선택): 소리 크기만 읽어서 노래 중인지 판단, 녹화 영상에는 목소리도 들어감
-let micOn = false, micLevel = 0, micAnalyser = null, micBuf = null, micStream = null;
-async function toggleMic() {
-  if (micOn) {
-    micOn = false; micLevel = 0;
-    if (micStream) micStream.getTracks().forEach((t) => t.stop());
-    micStream = null; updateMicBtn(); return;
-  }
+// 노래 = Space(모바일 🎤 버튼)를 누르고 있는 동안만 마이크가 켜짐(푸시투토크).
+// 마이크 소리 크기가 기준을 넘으면 "노래 중". 녹화 영상에는 내 목소리가 들어감.
+// 마이크를 못 쓰면(권한 거부, http 접속 등) 누르는 동안 합성 목소리로 대신 부름.
+let micState = 'off', micStream = null, micTrack = null, micSrc = null, micAnalyser = null, micBuf = null, micLevel = 0, micIdle = null;
+let singHeld = false;
+const useSynth = () => micState === 'denied' || !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+async function micAcquire() {
+  if (micState === 'ready' || micState === 'asking') return;
+  micState = 'asking';
   try {
     ensureAudio();
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    const src = actx.createMediaStreamSource(micStream);
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+    micTrack = micStream.getAudioTracks()[0];
+    micSrc = actx.createMediaStreamSource(micStream);
     micAnalyser = actx.createAnalyser(); micAnalyser.fftSize = 1024; micBuf = new Float32Array(micAnalyser.fftSize);
-    src.connect(micAnalyser);
-    if (recDest) src.connect(recDest);
-    micOn = true; toast('🎙️ 마이크 켜짐. 소리 내어 노래하면 관객에게 들려요');
+    micSrc.connect(micAnalyser);
+    if (recDest) micSrc.connect(recDest);
+    micState = 'ready';
+    micTrack.enabled = singHeld;
+    if (!singHeld) micIdle = setTimeout(micRelease, CFG.micIdleRelease * 1000);
   } catch (e) {
-    toast('마이크를 쓸 수 없어요. 브라우저 권한을 허용하거나 https 주소로 접속해 주세요');
+    micState = 'denied';
+    toast('마이크를 쓸 수 없어서 합성 목소리로 불러요. 브라우저에서 마이크를 허용하고 https 주소로 접속하면 내 목소리로 부를 수 있어요');
+    if (singHeld) { voiceStart(); voiceTo(lastMidi); }
   }
-  updateMicBtn();
+}
+function micRelease() { // 한동안 안 쓰면 장치까지 닫음 (브라우저 마이크 표시도 꺼짐)
+  if (micState !== 'ready' || singHeld) return;
+  micStream.getTracks().forEach((t) => t.stop());
+  try { micSrc.disconnect(); } catch (e) { /* 무시 */ }
+  micState = 'off'; micStream = micTrack = micSrc = micAnalyser = null; micLevel = 0;
+}
+function singDown() {
+  if (singHeld) return;
+  singHeld = true; singCap.classList.add('on'); singPadEl.classList.add('on');
+  ensureAudio();
+  clearTimeout(micIdle);
+  if (useSynth()) { voiceStart(); voiceTo(lastMidi); return; }
+  if (micState === 'ready') micTrack.enabled = true; else micAcquire();
+}
+function singUp() {
+  if (!singHeld) return;
+  singHeld = false; singCap.classList.remove('on'); singPadEl.classList.remove('on');
+  voiceStop();
+  if (micTrack) micTrack.enabled = false;
+  micLevel = 0;
+  clearTimeout(micIdle); micIdle = setTimeout(micRelease, CFG.micIdleRelease * 1000);
 }
 function readMic() {
-  if (!micOn || !micAnalyser) return;
+  if (!singHeld || micState !== 'ready') return;
   micAnalyser.getFloatTimeDomainData(micBuf);
-  let s = 0; for (let i = 0; i < micBuf.length; i++) s += micBuf[i] * micBuf[i];
-  const rms = Math.sqrt(s / micBuf.length);
-  micLevel = micLevel * 0.8 + rms * 0.2;
+  let sum = 0; for (let i = 0; i < micBuf.length; i++) sum += micBuf[i] * micBuf[i];
+  micLevel = micLevel * 0.75 + Math.sqrt(sum / micBuf.length) * 0.25;
 }
 
 /* ───────── 음 배치: 키 하나 = 한 음 (e.code 사용 → 한/영 무관) ───────── */
@@ -664,8 +729,11 @@ ROWS.forEach((row) => {
   keysEl.appendChild(r);
 });
 const singCap = document.createElement('div'); singCap.className = 'cap sing'; singCap.style.setProperty('--c', '#7dffb2');
-singCap.innerHTML = '<span class="k">Space</span><span class="n">꾹 눌러 노래</span>';
-keysEl.appendChild(singCap);
+singCap.innerHTML = '<span class="k">Space</span><span class="n">🎤 누르는 동안 노래</span><i class="lvl"></i>';
+const handCap = document.createElement('div'); handCap.className = 'cap sing'; handCap.style.setProperty('--c', '#ffb35c');
+handCap.innerHTML = '<span class="k">Enter</span><span class="n">📣 관객에게 넘기기</span>';
+const extraRow = document.createElement('div'); extraRow.className = 'row extra';
+extraRow.append(singCap, handCap); keysEl.appendChild(extraRow);
 const padsEl = $('#pads');
 STEPS.forEach((s, i) => {
   const b = document.createElement('button'); b.className = 'pad'; b.textContent = NAMES[i];
@@ -674,28 +742,32 @@ STEPS.forEach((s, i) => {
   b.addEventListener('pointerdown', (e) => { e.preventDefault(); noteOn(60 + s, i < 7 ? 1 : 2); flash(b); });
   padsEl.appendChild(b);
 });
-const singPadEl = document.createElement('button'); singPadEl.className = 'pad singpad'; singPadEl.textContent = '🎤 꾹 눌러 노래';
+const singPadEl = document.createElement('button'); singPadEl.className = 'pad singpad'; singPadEl.innerHTML = '🎤 누르는 동안 노래<i class="lvl"></i>';
 singPadEl.style.setProperty('--c', '#7dffb2');
 padsEl.appendChild(singPadEl);
-let singKey = false, singPad = false;
-singPadEl.addEventListener('pointerdown', (e) => { e.preventDefault(); singPadEl.setPointerCapture(e.pointerId); singPad = true; singPadEl.classList.add('on'); });
-['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => singPadEl.addEventListener(ev, () => { singPad = false; singPadEl.classList.remove('on'); }));
+const handPadEl = document.createElement('button'); handPadEl.className = 'pad handpad'; handPadEl.textContent = '📣 넘기기';
+handPadEl.style.setProperty('--c', '#ffb35c');
+padsEl.appendChild(handPadEl);
+handPadEl.addEventListener('pointerdown', (e) => { e.preventDefault(); handPadEl.setPointerCapture(e.pointerId); handDown(); });
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => handPadEl.addEventListener(ev, handUp));
+singPadEl.addEventListener('pointerdown', (e) => { e.preventDefault(); singPadEl.setPointerCapture(e.pointerId); singDown(); });
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => singPadEl.addEventListener(ev, singUp));
 function flash(el) { el.classList.add('on'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('on'), 140); }
 
 /* ───────── 연주 상태 ───────── */
 let now = 0, lastNoteAt = -99, lastPluckAt = -99, heat = 0, strum = 0, bowDir = 1, lastMidi = 60;
 let setStats = null; // 한 곡(조용해지기 전까지) 기록 → 박수·팁 판단
-const isSinging = () => singKey || singPad || (micOn && micLevel > CFG.micThreshold);
+const isSinging = () => singHeld && (voice !== null || micLevel > CFG.micThreshold);
 const isPlaying = () => now - lastNoteAt < CFG.playHold;
 let followersCache = 0;
 const fameF = () => Math.log10(1 + followersCache); // 0 ~ 6
 function hearRadius() {
   const sing = isSinging() ? CFG.singBoost * ((S.eq.gear === 'micstand') ? ITEM.micstand.stat.singHear : 1) : 1;
-  return (CFG.hearBase + CFG.hearGain * heat) * instStat().hear * sing + fameF() * 1.2;
+  return (CFG.hearBase + CFG.hearGain * heat) * instStat().hear * sing * (now < choirBoostUntil ? 1.6 : 1) + fameF() * 1.2;
 }
 function attractMult() {
   const sing = isSinging() ? 1.3 * ((S.eq.gear === 'micstand') ? ITEM.micstand.stat.singAttract : 1) : 1;
-  return instStat().attract * sing * (1 + fameF() * 0.15) * (1 + styleScore() * 0.03);
+  return instStat().attract * sing * (1 + fameF() * 0.15) * (1 + styleScore() * 0.03) * (now < choirBoostUntil ? 1.4 : 1);
 }
 function newSet() { return { t0: now, notes: 0, uniq: new Set(), octs: new Set(), singT: 0 }; }
 function trackNote(midi, oct) {
@@ -712,8 +784,132 @@ function noteOn(midi, oct) {
   strum = 1; bowDir = -bowDir;
   trackNote(midi, oct);
   spawnNoteSprite(oct);
-  if (singKey || singPad) voiceTo(midi);
+  if (voice) voiceTo(midi);
   for (const n of npcs) if (n.state === 'listen') n.bob = 1;
+  hookNote(midi);
+}
+
+/* ───────── 떼창: 후렴 익히기 → 같이 부르기 / 관객에게 넘기기 ───────── */
+const hist = [];           // 최근에 친 음 { m, t }
+let hook = null;           // 관객이 외운 후렴 { id, seq, iv(음 사이 간격) }
+let hookCand = null;       // 익히는 중인 후렴 { seq, count }
+let hookPos = 0;           // 지금 후렴 몇 번째 음까지 맞게 쳤는지
+let hookId = 0, hookUsedAt = -99, choirUntil = 0, choirBoostUntil = 0, choirPasses = 0, passChoir = false, passBubbles = 0;
+let handHeld = false, hand = null, lastHandToast = -99;
+const sameSeq = (a, b) => a && b && a.length === b.length && a.every((m, i) => m === b[i]);
+function findRepeat() {
+  const n = hist.length;
+  for (let L = CFG.hookMax; L >= CFG.hookMin; L--) {
+    if (n < L * 2) continue;
+    const tail = hist.slice(n - L).map((h) => h.m);
+    if (new Set(tail).size < 3) continue; // 같은 음만 반복하는 건 후렴으로 안 침
+    let count = 1, j = n - 2 * L;
+    while (j >= 0) {
+      let ok = true;
+      for (let k = 0; k < L; k++) if (hist[j + k].m !== tail[k]) { ok = false; break; }
+      if (ok) { count++; j -= L; } else j--;
+    }
+    if (count >= 2) return { seq: tail, count };
+  }
+  return null;
+}
+const listening = () => npcs.filter((n) => n.state === 'listen');
+const participation = () => clamp(0.35 + 0.2 * choirPasses + 0.35 * heat, 0, 1);
+const canSing = (n) => hook && n.state === 'listen' && n.knows === hook.id && n.type !== 'runner' && n.type !== 'filmer';
+const isSinger = (n) => canSing(n) && n.singSeed < participation();
+const choirReady = () => hook && listening().length >= CFG.choirMinCrowd && npcs.filter(isSinger).length >= 2;
+const choirOn = () => now < choirUntil;
+function learnHook(seq) {
+  const L = seq.length, tail = hist.slice(hist.length - L);
+  const iv = tail.map((h, i) => (i < L - 1 ? clamp(tail[i + 1].t - h.t, 0.18, 0.9) : 0.45));
+  const fresh = !hook;
+  hook = { id: ++hookId, seq, iv }; hookCand = null; hookPos = 0; choirPasses = 0; hookUsedAt = now;
+  listening().forEach((n) => { n.knows = hook.id; });
+  toast(fresh ? '🎤 관객이 후렴을 외웠어요! 다시 치면 따라 불러요' : '🎤 관객이 새 후렴을 외웠어요');
+}
+function choirSing(midi, dur, solo) {
+  const singers = npcs.filter(isSinger);
+  if (!singers.length) return;
+  const kid = singers.some((n) => n.type === 'family'), drunk = singers.some((n) => n.type === 'drunk');
+  choirNote(midi, singers.length, dur, solo, kid, drunk);
+  choirUntil = now + Math.max(1.0, dur + 0.6); choirBoostUntil = now + 6; passChoir = true;
+  heat = Math.min(1, heat + 0.04);
+  lastNoteAt = now;
+  if (setStats) setStats.choir = (setStats.choir || 0) + 1;
+  if (rec) rec.stats.choir = true;
+  for (const n of singers) n.bob = 1;
+  if (passBubbles < 2 && Math.random() < 0.35) { // 한 소절에 말풍선은 두 개까지
+    const n = pick(singers); passBubbles++;
+    say(n, n.type === 'drunk' ? '♪ 랄랄라~!!' : n.type === 'family' ? '♪ 라라!' : pick(['♪ 라~', '♪ 라라~', '♪ 라라라']));
+  }
+}
+function completeHook() {
+  hookUsedAt = now;
+  listening().forEach((n) => { n.knows = hook.id; }); // 이번에 들은 사람도 외움
+  if (passChoir) {
+    choirPasses++;
+    if (!S.firstChoir) { S.firstChoir = true; save(); toast('🎉 첫 떼창!'); }
+    const dw = npcs.find((n) => n.type === 'dogwalker' && isSinger(n));
+    if (dw && Math.random() < 0.4) { say(dw.dog, '아우~'); playHowl(); }
+  }
+  passChoir = false; passBubbles = 0;
+}
+function hookNote(midi) {
+  hist.push({ m: midi, t: now });
+  while (hist.length > 80 || (hist.length && now - hist[0].t > CFG.hookWindow)) hist.shift();
+  // 1) 외운 후렴을 치는 중이면 관객이 두 번째 음부터 합류
+  if (hook) {
+    const seq = hook.seq;
+    if (midi === seq[hookPos]) hookPos++;
+    else {
+      if (hookPos >= 2 && choirOn()) { // 후렴 중간에 다른 음 → "어?"
+        npcs.filter(isSinger).slice(0, 2).forEach((n, i) => say(n, '어?', i * 0.15));
+        choirUntil = 0; passChoir = false; passBubbles = 0;
+      }
+      hookPos = midi === seq[0] ? 1 : 0;
+    }
+    if (hookPos >= 2 && choirReady()) choirSing(midi, 0.38, false);
+    if (hookPos === seq.length) { completeHook(); hookPos = 0; }
+  }
+  // 2) 새 후렴 익히기
+  const r = findRepeat();
+  if (r && !partOfHook(r.seq) && !(hook && now - hookUsedAt < CFG.hookLock)) {
+    hookCand = r;
+    if (r.count >= CFG.hookRepeats) learnHook(r.seq);
+  }
+}
+// 외운 후렴을 이어서 반복하면 생기는 "후렴의 일부·순서만 돌린 것"은 새 후렴으로 안 침
+function partOfHook(seq) {
+  if (!hook) return false;
+  const cyc = hook.seq.concat(hook.seq);
+  for (let i = 0; i < hook.seq.length; i++) if (seq.every((m, k) => cyc[i + k] === m)) return true;
+  return false;
+}
+function handDown() {
+  if (handHeld) return;
+  handHeld = true; handCap.classList.add('on'); handPadEl.classList.add('on');
+  ensureAudio();
+  const c = listening().length;
+  if (!hook) { if (now - lastHandToast > 3) toast('아직 관객이 외운 후렴이 없어요. 같은 멜로디를 3번 반복해 보세요'); lastHandToast = now; return; }
+  if (!choirReady()) { if (now - lastHandToast > 3) toast(`따라 부를 관객이 부족해요 (듣는 사람 ${c}/${CFG.choirMinCrowd}명)`); lastHandToast = now; return; }
+  hand = { i: 0, at: now + 0.15 };
+  passChoir = false; passBubbles = 0;
+}
+function handUp() {
+  if (!handHeld) return;
+  handHeld = false; hand = null; handCap.classList.remove('on'); handPadEl.classList.remove('on');
+}
+function updateHand() {
+  if (!hand) return;
+  if (!choirReady()) { hand = null; toast('따라 부르던 관객이 흩어졌어요'); return; }
+  if (now < hand.at) return;
+  const i = hand.i, d = hook.iv[i];
+  choirSing(hook.seq[i], Math.max(0.25, d * 0.85), true);
+  hand.i++;
+  if (hand.i >= hook.seq.length) { completeHook(); hand.i = 0; hand.at = now + d + 0.5; } else hand.at = now + d;
+}
+function resetChoir() {
+  hist.length = 0; hook = null; hookCand = null; hookPos = 0; hookUsedAt = -99; choirUntil = 0; choirBoostUntil = 0; choirPasses = 0; hand = null;
 }
 
 const typing = (e) => { const t = e.target; return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'); };
@@ -723,7 +919,13 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
     e.preventDefault();
     if (!introEl.hidden) closeIntro();
-    if (!e.repeat) { singKey = true; singCap.classList.add('on'); }
+    if (!e.repeat) singDown();
+    return;
+  }
+  if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+    e.preventDefault();
+    if (!introEl.hidden) { closeIntro(); return; }
+    if (!e.repeat) handDown();
     return;
   }
   const k = keyMap.get(e.code);
@@ -735,9 +937,10 @@ window.addEventListener('keydown', (e) => {
   flash(k.el);
 });
 window.addEventListener('keyup', (e) => {
-  if (e.code === 'Space' && !typing(e)) { e.preventDefault(); singKey = false; singCap.classList.remove('on'); }
+  if (e.code === 'Space' && !typing(e)) { e.preventDefault(); singUp(); }
+  if ((e.code === 'Enter' || e.code === 'NumpadEnter') && !typing(e)) { e.preventDefault(); handUp(); }
 });
-window.addEventListener('blur', () => { singKey = false; singPad = false; singCap.classList.remove('on'); });
+window.addEventListener('blur', () => { singUp(); handUp(); });
 
 /* ───────── 떠오르는 음표·글자 ───────── */
 const glyphTex = (ch, size) => canvasTex(64, 64, (g) => {
@@ -816,6 +1019,8 @@ const TYPES = {
   filmer: { speed: [0.95, 1.3], attract: 1.7, patience: 0.8, row: 'front', tip: 0.15, amounts: [2, 4, 3, 0.5, 0] },
   drunk: { speed: [0.55, 0.8], attract: 2.4, patience: 1.8, row: null, tip: 0.7, amounts: [0, 2, 4, 2, 0.8] },
   family: { speed: [0.85, 1.1], attract: 1.4, patience: 1.0, row: 'back', tip: 0.5, amounts: [3, 6, 2, 0.2, 0] },
+  dogwalker: { speed: [0.85, 1.15], attract: 1.2, patience: 0.6, row: null, tip: 0.3, amounts: [3, 6, 2, 0.3, 0] }, // 강아지가 보채서 오래 못 있음
+  runner: { speed: [3.0, 3.8], attract: 0.45, patience: 0.45, row: null, tip: 0.12, amounts: [3, 5, 1, 0, 0] },   // 잘 안 멈추고 금방 다시 뜀
 };
 const AMOUNTS = [100, 500, 1000, 5000, 10000];
 const LINES = {
@@ -833,6 +1038,12 @@ const LINES = {
   normalCheer: ['와~', '잘한다!', '멋있다'],
   recognize: ['어? 버스타그램에서 본 사람!', '헐 그 버스커다', '실물이 낫네'],
   playerSing: ['♪ 라라라~', '♪ 오늘 밤~', '♪ 우우~', '♪ 랄랄라'],
+  dogArrive: ['잠깐만 듣고 가자', '쉿, 들어봐'],
+  dogLeave: ['알았어 가자~', '그래그래 산책 가자'],
+  dogCheer: ['우리 초코도 좋대요'],
+  bark: ['멍!', '왈왈!', '멍멍!'],
+  runArrive: ['헉헉… 좋은데?', '잠깐 쉬어 갈까'],
+  runCheer: ['화이팅!', '다시 뛰어야지'],
 };
 
 function makePhone(caseColor) {
@@ -854,6 +1065,48 @@ function makeBottle() {
   addMesh(new THREE.CylinderGeometry(0.016, 0.035, 0.09, 8), m, 0, 0.075, 0, g);
   return g;
 }
+const DOG_COLORS = [[0xb07a45, 0x5a3a20], [0xf2eadc, 0xd8c8b0], [0x2b2622, 0x4a3f38], [0xd9a54a, 0xb07a2a], [0xe8e2d8, 0x8a6040]];
+function makeDog() {
+  const [c1, c2] = pick(DOG_COLORS), fur = lambert(c1), dark = lambert(c2), g = new THREE.Group(), body = new THREE.Group();
+  g.add(body);
+  addMesh(new THREE.BoxGeometry(0.2, 0.18, 0.46), fur, 0, 0.36, 0, body);
+  const head = new THREE.Group(); head.position.set(0, 0.5, 0.26); body.add(head);
+  addMesh(new THREE.BoxGeometry(0.19, 0.17, 0.18), fur, 0, 0, 0.02, head);
+  addMesh(new THREE.BoxGeometry(0.11, 0.08, 0.1), dark, 0, -0.04, 0.14, head);
+  addMesh(new THREE.SphereGeometry(0.022, 6, 4), cmat(0x111111), 0, -0.01, 0.195, head).castShadow = false;
+  [0.07, -0.07].forEach((x) => {
+    addMesh(new THREE.SphereGeometry(0.018, 6, 4), cmat(0x111111), x, 0.03, 0.11, head).castShadow = false;
+    addMesh(new THREE.BoxGeometry(0.05, 0.1, 0.03), dark, x * 1.25, 0.07, -0.03, head).rotation.z = x > 0 ? -0.35 : 0.35;
+  });
+  addMesh(new THREE.BoxGeometry(0.21, 0.04, 0.05), lambert(0xd8343f), 0, -0.07, -0.05, head); // 목줄
+  const legs = [];
+  [[0.07, 0.17], [-0.07, 0.17], [0.07, -0.17], [-0.07, -0.17]].forEach(([x, z]) => {
+    const p = new THREE.Group(); p.position.set(x, 0.3, z); body.add(p);
+    addMesh(new THREE.BoxGeometry(0.06, 0.3, 0.06).translate(0, -0.15, 0), dark, 0, 0, 0, p);
+    legs.push(p);
+  });
+  const tail = new THREE.Group(); tail.position.set(0, 0.42, -0.23); body.add(tail);
+  addMesh(new THREE.CylinderGeometry(0.018, 0.028, 0.2, 6).translate(0, 0.1, 0), fur, 0, 0, 0, tail);
+  tail.rotation.x = -0.6;
+  return { g, body, head, legs, tail, pos: new V3(), phase: rand(0, 6), type: 'dog', scale: 1, pending: null, bubble: null, bubbleUntil: 0 };
+}
+function playBark() {
+  if (!actx) return;
+  const t = actx.currentTime;
+  [0, 0.16].forEach((d) => {
+    const o = actx.createOscillator(), f = actx.createBiquadFilter(), g = actx.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(rand(520, 640), t + d); o.frequency.exponentialRampToValueAtTime(260, t + d + 0.09);
+    f.type = 'bandpass'; f.frequency.value = 1100; f.Q.value = 2;
+    g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.12, t + d + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.1);
+    o.connect(f); f.connect(g); g.connect(master); o.start(t + d); o.stop(t + d + 0.12);
+  });
+}
+const leashMat = new THREE.LineBasicMaterial({ color: 0xd8343f });
+const flashTex = canvasTex(64, 64, (g) => {
+  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.25, 'rgba(255,250,220,.7)'); r.addColorStop(1, 'rgba(255,240,200,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+});
 const AVATAR_COLORS = ['#ff7aa8', '#7ab8ff', '#ffc65c', '#7dffb2', '#b49bff', '#ff9a5c'];
 function genHandle() {
   const sns = D.sns;
@@ -865,11 +1118,23 @@ function decorate(n) {
     n.phone.scale.setScalar(1.5);
     n.body.add(n.phone);
     n.handle = genHandle(); n.avatar = pick(AVATAR_COLORS);
+    n.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    n.flash.position.set(0.02, 0.06, 0.03); n.flash.scale.set(0.4, 0.4, 1); n.flash.visible = false; n.phone.add(n.flash);
   } else if (n.type === 'drunk') {
     const bottle = makeBottle(); bottle.position.set(0, -0.66, 0.05); bottle.rotation.x = 1.1; n.armR.add(bottle);
     addMesh(new THREE.SphereGeometry(0.04, 8, 6), cmat(0xd9474f), 0, 0.15, 0.185, n.head).castShadow = false;
     [0.1, -0.1].forEach((x) => { const c = addMesh(new THREE.SphereGeometry(0.045, 8, 6), cmat(0xef7f86), x, 0.12, 0.15, n.head); c.scale.z = 0.4; c.castShadow = false; });
     addMesh(new THREE.BoxGeometry(0.07, 0.3, 0.02), cmat(0xc0392b), 0.04, 1.32, 0.235, n.body).rotation.set(-0.12, 0, 0.35);
+  } else if (n.type === 'dogwalker') {
+    n.dog = makeDog(); scene.add(n.dog.g); speakers.push(n.dog);
+    n.dog.pos.copy(n.pos).add(new V3(0.7, 0, 0));
+    n.leash = new THREE.Line(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 9 }, () => new V3())), leashMat);
+    n.leash.frustumCulled = false; scene.add(n.leash);
+  } else if (n.type === 'runner') {
+    const band = addMesh(new THREE.CylinderGeometry(0.2, 0.2, 0.05, 14, 1, true), lambert(pick([0xff4f7a, 0x37d0ff, 0xf2e14d])), 0, 0.24, 0, n.head);
+    band.material.side = THREE.DoubleSide; band.castShadow = false;
+    [0.19, -0.19].forEach((x) => { addMesh(new THREE.SphereGeometry(0.025, 6, 4), cmat(0xf4f4f4), x, 0.16, 0.02, n.head).castShadow = false; }); // 이어폰
+    n.lean = 0;
   } else if (n.type === 'family') {
     const kid = makePerson(randomLook());
     kid.g.scale.setScalar(0.5); kid.head.scale.setScalar(1.4);
@@ -920,7 +1185,7 @@ function updateBubbles(t) {
     const left = n.bubbleUntil - t;
     n.bubble.visible = left > 0;
     if (left > 0) {
-      n.bubble.position.set(n.pos.x, (n.type === 'family' ? 2.95 : 2.2) * n.scale, n.pos.z);
+      n.bubble.position.set(n.pos.x, (n.type === 'family' ? 2.95 : n.type === 'dog' ? 0.85 : 2.2) * n.scale, n.pos.z);
       n.bubble.material.opacity = Math.min(1, left / 0.3);
     }
   }
@@ -961,13 +1226,14 @@ function newWalkTarget(n) {
 function spawnNpc(type) {
   const look = randomLook();
   if (type === 'drunk') Object.assign(look, { shirt: 0xe9e4da, pants: 0x3a3d4a, skin: pick([0xe5b48c, 0xcf9a6e]) });
+  if (type === 'runner') Object.assign(look, { shirt: pick([0xff6a3d, 0x2fd18a, 0x3d8bff, 0xf5f5f5, 0xff4f9a]), pants: 0x1c1c22 });
   const p = makePerson(look);
   scene.add(p.g);
   const T = TYPES[type];
   const n = Object.assign(p, {
     type, pos: areaRandom(), dir: new V3(0, 0, 1), speed: rand(T.speed[0], T.speed[1]), phase: rand(0, 6),
     state: 'walk', cooldown: 0, spot: null, listenFor: 0, patience: 0, bob: 0, clapUntil: 0, nextClap: 0, headYaw: 0, scale: rand(0.92, 1.08),
-    nextTalk: rand(3, 10), pending: null, bubble: null, bubbleUntil: 0, recorded: false,
+    nextTalk: rand(3, 10), pending: null, bubble: null, bubbleUntil: 0, recorded: false, knows: 0, singSeed: Math.random(),
   });
   n.g.scale.setScalar(n.scale);
   decorate(n);
@@ -977,8 +1243,13 @@ function spawnNpc(type) {
 function clearNpcs() {
   for (const n of npcs) {
     scene.remove(n.g);
-    if (n.bubble) { scene.remove(n.bubble); n.bubble.material.dispose(); }
-    const i = speakers.indexOf(n); if (i >= 0) speakers.splice(i, 1);
+    for (const sp of [n, n.dog]) {
+      if (!sp) continue;
+      if (sp.bubble) { scene.remove(sp.bubble); sp.bubble.material.dispose(); }
+      const i = speakers.indexOf(sp); if (i >= 0) speakers.splice(i, 1);
+    }
+    if (n.dog) scene.remove(n.dog.g);
+    if (n.leash) { scene.remove(n.leash); n.leash.geometry.dispose(); }
   }
   npcs.length = 0;
   SPOTS.forEach((s) => { s.taken = null; });
@@ -1010,6 +1281,7 @@ function startListening(n) {
   return true;
 }
 function stopListening(n) {
+  if (n.type === 'dogwalker' && n.state === 'listen' && Math.random() < 0.6) { say(n, pick(LINES.dogLeave)); say(n.dog, pick(LINES.bark)); playBark(); }
   if (n.spot) n.spot.taken = null;
   n.spot = null; n.state = 'walk'; n.cooldown = rand(CFG.reStopCooldown[0], CFG.reStopCooldown[1]);
   n.clapUntil = 0; n.recorded = false;
@@ -1022,6 +1294,8 @@ function onArrive(n) {
   else if (n.type === 'filmer') say(n, pick(LINES.filmArrive), 0.6);
   else if (n.type === 'drunk') say(n, pick(LINES.drunkArrive), 0.3);
   else if (n.type === 'family') say(n, pick(LINES.kidArrive), 0.4);
+  else if (n.type === 'dogwalker') say(n, pick(LINES.dogArrive), 0.4);
+  else if (n.type === 'runner') say(n, pick(LINES.runArrive), 0.3);
   n.nextTalk = now + rand(5, 9);
   if (n.type === 'filmer') maybeStartRecording(n);
 }
@@ -1074,6 +1348,72 @@ function animateStand(n, dt, t) {
     n.armL.rotation.set(-0.05, 0, -0.08); n.armR.rotation.set(-0.05, 0, 0.08);
   }
 }
+function animateRun(n, dt, speed, inPlace) {
+  n.phase += dt * (inPlace ? 9 : speed * 2.9);
+  const s = Math.sin(n.phase), amp = inPlace ? 0.55 : 1.0;
+  n.legL.rotation.x = s * amp; n.legR.rotation.x = -s * amp;
+  n.armL.rotation.set(-0.9 - s * 0.6 * amp, 0, -0.1); n.armR.rotation.set(-0.9 + s * 0.6 * amp, 0, 0.1); // 팔 굽혀 흔들기
+  n.body.position.y = Math.abs(Math.cos(n.phase)) * (inPlace ? 0.05 : 0.09);
+  n.lean += ((inPlace ? 0.05 : 0.22) - n.lean) * Math.min(1, dt * 5);
+  n.body.rotation.set(n.lean, 0, 0);
+}
+// 강아지: 주인 오른쪽 옆을 따라 종종걸음, 서서 들을 땈 앉아서 꼬리 흔들기
+function updateDog(n, dt, t, sitting) {
+  const d = n.dog, yaw = n.g.rotation.y;
+  const side = new V3(-Math.cos(yaw), 0, Math.sin(yaw)), fwd = new V3(Math.sin(yaw), 0, Math.cos(yaw));
+  const goal = n.pos.clone().addScaledVector(side, sitting ? 0.55 : 0.75).addScaledVector(fwd, sitting ? 0.1 : 0.35);
+  const prev = d.pos.clone();
+  d.pos.lerp(goal, Math.min(1, dt * (sitting ? 3 : 4)));
+  const moved = prev.distanceTo(d.pos) / Math.max(dt, 1e-3);
+  const dYaw = moved > 0.15 ? Math.atan2(d.pos.x - prev.x, d.pos.z - prev.z) : sitting ? Math.atan2(-d.pos.x, -d.pos.z) : yaw;
+  d.g.rotation.y += wrapAngle(dYaw - d.g.rotation.y) * Math.min(1, dt * 6);
+  d.g.position.copy(d.pos);
+  const p = isPlaying();
+  if (sitting && moved < 0.3) {
+    d.body.rotation.x = -0.35; d.body.position.y = -0.06;
+    d.legs[0].rotation.x = 0.35; d.legs[1].rotation.x = 0.35; d.legs[2].rotation.x = -1.2; d.legs[3].rotation.x = -1.2;
+    d.head.rotation.x = 0.3 + (p ? Math.sin(t * 4.8) * 0.12 : 0);
+    d.tail.rotation.z = Math.sin(t * (p ? 16 : 6)) * 0.6;
+  } else {
+    d.phase += dt * Math.max(2, moved) * 9;
+    const s = Math.sin(d.phase);
+    d.body.rotation.x = 0; d.body.position.y = Math.abs(s) * 0.03;
+    d.legs[0].rotation.x = s * 0.7; d.legs[3].rotation.x = s * 0.7; d.legs[1].rotation.x = -s * 0.7; d.legs[2].rotation.x = -s * 0.7;
+    d.head.rotation.x = 0; d.tail.rotation.z = Math.sin(t * 10) * 0.4;
+  }
+  // 목줄: 주인 오른손 → 강아지 목, 살짝 처지게
+  n.armR.children[1].getWorldPosition(tmpV);
+  d.head.getWorldPosition(tmpV2); tmpV2.y -= 0.06;
+  const pos = n.leash.geometry.attributes.position;
+  for (let i = 0; i <= 8; i++) {
+    const k = i / 8;
+    pos.setXYZ(i, tmpV.x + (tmpV2.x - tmpV.x) * k, tmpV.y + (tmpV2.y - tmpV.y) * k - Math.sin(k * Math.PI) * 0.12, tmpV.z + (tmpV2.z - tmpV.z) * k);
+  }
+  pos.needsUpdate = true;
+}
+// 떼창 중: 다 같이 같은 박자로 좌우로 흔들며 팔 들기, 밤에는 찍는 사람이 폰 플래시를 켜고 흔듦
+function choirPose(n, t) {
+  const on = choirOn(), sway = Math.sin(now * 2.4);
+  if (n.type === 'filmer') {
+    const wave = on && env.L.night;
+    n.flash.visible = wave;
+    if (wave) {
+      n.phone.position.set(sway * 0.12, 2.05, 0.4); n.phone.rotation.set(-0.2, 0, -sway * 0.5);
+      n.armL.rotation.set(-2.75, 0, -0.35 + sway * 0.15); n.armR.rotation.set(-2.75, 0, 0.35 + sway * 0.15);
+    }
+    return;
+  }
+  if (!on || !isSinger(n)) return;
+  if (n.type === 'family') {
+    n.kid.armL.rotation.set(-2.8, 0, 0.3 + sway * 0.25); n.kid.armR.rotation.set(-2.8, 0, -0.3 + sway * 0.25);
+    n.body.rotation.z = sway * 0.06;
+    return;
+  }
+  n.body.rotation.z = sway * (n.type === 'drunk' ? 0.22 : 0.12);
+  n.armL.rotation.set(-2.7 + sway * 0.15, 0, 0.35 - sway * 0.2);
+  if (n.type !== 'dogwalker') n.armR.rotation.set(-2.7 - sway * 0.15, 0, -0.35 - sway * 0.2); // 강아지 산책은 한 손에 목줄
+  n.head.rotation.x = -0.15;
+}
 function phonePose(n, filming, t) {
   const r = n.phone.userData.rec;
   if (filming) {
@@ -1081,8 +1421,10 @@ function phonePose(n, filming, t) {
     n.armL.rotation.set(-1.95, 0, -0.45); n.armR.rotation.set(-1.95, 0, 0.45);
     r.visible = (t % 1) < 0.6;
   } else {
-    n.phone.position.set(-0.16, 1.12, 0.5); n.phone.rotation.set(-1.0, 0, 0);
-    n.armR.rotation.set(-1.0, 0, 0.3);
+    // 화면 보며 걷기: 화면이 얼굴 쪽 위를 향하게(윗부분이 앞으로 기울게) 손바닥 위에 올려 듦
+    n.phone.position.set(-0.12, 1.2, 0.5); n.phone.rotation.set(0.75, -0.25, 0);
+    n.flash.visible = false;
+    n.armR.rotation.set(-1.1, 0, 0.4);
     r.visible = false;
   }
 }
@@ -1139,14 +1481,14 @@ function setQuality(st) {
   const variety = clamp(st.uniq.size / 9, 0, 1);
   const sing = clamp(st.singT / Math.min(dur, 8), 0, 1);
   const length = clamp(dur / 25, 0, 1);
-  return clamp((0.3 * dens + 0.2 * variety + 0.25 * sing + 0.25 * length) * instStat().quality, 0, 1);
+  return clamp((0.3 * dens + 0.2 * variety + 0.25 * sing + 0.25 * length) * instStat().quality + (st.choir ? 0.2 : 0), 0, 1);
 }
 function payTips(t) {
   const q = setQuality(setStats), f = fameF(), L = env.L, it = instStat();
   for (const n of npcs) {
     if (n.state !== 'listen') continue;
     const T = TYPES[n.type];
-    const p = T.tip * (0.35 + 0.8 * q) * (1 + f * 0.12) * (1 + styleScore() * 0.04) * it.tip;
+    const p = T.tip * (0.35 + 0.8 * q) * (1 + f * 0.12) * (1 + styleScore() * 0.04) * it.tip * (setStats && setStats.choir ? 1.4 : 1);
     if (Math.random() > Math.min(0.95, p)) continue;
     let w = T.amounts.slice(), sum = w.reduce((a, b) => a + b, 0), r = Math.random() * sum, i = 0;
     while ((r -= w[i]) > 0 && i < w.length - 1) i++;
@@ -1210,7 +1552,7 @@ function ensureRecRenderer() {
 function maybeStartRecording(n) {
   if (rec || n.recorded || now < recNextAt || !ensureRecRenderer()) return;
   n.recorded = true;
-  const stats = { notes: 0, uniq: new Set(), octs: new Set(), singT: 0, crowdMax: 0, drunk: false, kid: false, applause: false };
+  const stats = { notes: 0, uniq: new Set(), octs: new Set(), singT: 0, crowdMax: 0, drunk: false, kid: false, dog: false, runner: false, applause: false, choir: false };
   rec = { filmer: n, t0: now, w0: performance.now() / 1000, stats, thumb: null, mr: null, chunks: [], lastFrame: -1 };
   if (window.MediaRecorder && recCanvas.captureStream) {
     try {
@@ -1238,7 +1580,7 @@ function updateRecording(t) {
   const st = rec.stats;
   if (isSinging()) st.singT += 1 / 60;
   let crowd = 0;
-  for (const n of npcs) if (n.state === 'listen') { crowd++; if (n.type === 'drunk') st.drunk = true; if (n.type === 'family') st.kid = true; }
+  for (const n of npcs) if (n.state === 'listen') { crowd++; if (n.type === 'drunk') st.drunk = true; if (n.type === 'family') st.kid = true; if (n.type === 'dogwalker') st.dog = true; if (n.type === 'runner') st.runner = true; }
   st.crowdMax = Math.max(st.crowdMax, crowd);
   if (t - rec.lastFrame >= 1 / CFG.clipFps) { rec.lastFrame = t; renderRecFrame(t); }
   const wall = performance.now() / 1000 - rec.w0; // 영상 길이는 실제 시간 기준(프레임이 느려도 7초)
@@ -1270,7 +1612,7 @@ function clipQuality(st) {
   const variety = clamp(st.uniq.size / 8, 0, 1);
   const sing = clamp(st.singT / 4, 0, 1);
   const crowd = clamp(st.crowdMax / 8, 0, 1);
-  let q = 0.32 * dens + 0.16 * variety + 0.22 * sing + 0.2 * crowd + 0.1 * (st.applause ? 1 : 0);
+  let q = 0.32 * dens + 0.16 * variety + 0.22 * sing + 0.2 * crowd + 0.1 * (st.applause ? 1 : 0) + (st.choir ? 0.25 : 0);
   q = q * instStat().quality + styleScore() * 0.012;
   return clamp(q, 0, 1);
 }
@@ -1283,6 +1625,9 @@ function clipTags(st, q, viral) {
   if (st.crowdMax >= 6) tags.push('crowdBig'); else if (st.notes >= 3) tags.push('crowdSmall');
   if (st.drunk) tags.push('drunk', 'drunk');
   if (st.kid) tags.push('kid', 'kid');
+  if (st.dog) tags.push('dog', 'dog');
+  if (st.runner) tags.push('runner');
+  if (st.choir) tags.push('choir', 'choir', 'choir');
   if (st.applause) tags.push('applause');
   if (q > 0.65) tags.push('high', 'high');
   if (viral) tags.push('viral', 'viral');
@@ -1297,7 +1642,7 @@ function createPost(r, blob, thumb) {
   const st = r.stats, L = env.L, q = clipQuality(st), fol = computeFollowers(Date.now());
   const reach = (15 + fol * 0.5) * L.sns * (0.5 + q * 1.3) + q * q * 300 * L.sns;
   let likes = Math.round(reach * (0.08 + 0.3 * q) * rand(0.7, 1.3));
-  const viral = q > 0.7 && Math.random() < 0.08 + 0.15 * (q - 0.7) / 0.3;
+  const viral = q > 0.7 && Math.random() < (0.08 + 0.15 * (q - 0.7) / 0.3) * (st.choir ? 2 : 1);
   if (viral) likes = Math.round(likes * rand(6, 15));
   const gain = Math.round(likes * (0.1 + 0.3 * q) * rand(0.7, 1.2));
   const live = Date.now() + rand(4000, 9000);
@@ -1374,6 +1719,8 @@ function updateCrowd(dt, t) {
         if (n.type === 'drunk') say(n, pick(LINES.drunkCheer), d);
         else if (n.type === 'family') say(n, pick(LINES.kidCheer), d);
         else if (n.type === 'filmer') { if (Math.random() < 0.5) say(n, pick(LINES.filmCheer), d); }
+        else if (n.type === 'dogwalker') { say(n.dog, pick(LINES.bark), d); setTimeout(playBark, d * 1000); if (Math.random() < 0.4) say(n, pick(LINES.dogCheer), d + 0.8); }
+        else if (n.type === 'runner') { if (Math.random() < 0.5) say(n, pick(LINES.runCheer), d); }
         else if (Math.random() < 0.3) say(n, pick(LINES.normalCheer), d);
       }
       payTips(t);
@@ -1397,7 +1744,7 @@ function updateCrowd(dt, t) {
         n.pos.x -= n.dir.z * w * dt; n.pos.z += n.dir.x * w * dt;
       }
       n.g.rotation.y = Math.atan2(n.dir.x, n.dir.z);
-      animateWalk(n, dt, sp);
+      if (n.type === 'runner') animateRun(n, dt, sp, false); else animateWalk(n, dt, sp);
       if (walking && d < 1.0) { if (n.via) n.via = null; else newWalkTarget(n); }
       if (!walking && d < 0.12) { n.state = 'listen'; onArrive(n); }
       const dist = n.pos.length(), hearing = playing && dist < R;
@@ -1410,6 +1757,8 @@ function updateCrowd(dt, t) {
         n.body.rotation.z = Math.sin(t * 1.5 + n.phase) * 0.16; roll = -n.body.rotation.z * 0.7;
         n.armR.rotation.x *= 1.5;
         if (walking && t >= n.nextTalk) { say(n, pick(LINES.drunkWalk)); n.nextTalk = t + rand(6, 11); }
+      } else if (n.type === 'dogwalker') {
+        n.armR.rotation.set(-0.45, 0, 0.25); updateDog(n, dt, t, false);
       } else if (n.type === 'family') {
         familyPose(n, 'walk', t);
         const kl = hearing ? clamp(toPlayer, -1.4, 1.4) : Math.sin(t * 0.7 + n.phase) * 0.6;
@@ -1420,11 +1769,19 @@ function updateCrowd(dt, t) {
       n.pos.lerp(n.spot.pos, Math.min(1, dt * 2));
       turnTo(n, Math.atan2(-n.pos.x, -n.pos.z), dt, 5);
       n.headYaw = 0;
-      if (n.type === 'drunk') drunkDance(n, dt, t); else animateStand(n, dt, t);
+      if (n.type === 'drunk') drunkDance(n, dt, t);
+      else if (n.type === 'runner') animateRun(n, dt, 0, true); // 제자리 뛰기
+      else animateStand(n, dt, t);
+      if (n.type === 'dogwalker') {
+        if (t >= n.clapUntil) n.armR.rotation.set(-0.45, 0, 0.25);
+        updateDog(n, dt, t, true);
+        if (playing && t >= n.nextTalk) { say(n.dog, pick(LINES.bark)); playBark(); n.nextTalk = t + rand(8, 14); }
+      }
       if (n.type === 'filmer') { phonePose(n, true, t); n.head.rotation.x = 0.05; if (!rec && !n.recorded) maybeStartRecording(n); }
       if (n.type === 'family') familyPose(n, 'listen', t);
+      choirPose(n, t);
       n.listenFor += dt * (heat < 0.15 ? 2 : 1);
-      if (t < n.clapUntil && t >= n.nextClap) { playClap((n.type === 'family' ? 0.035 : 0.05) + 0.03 * Math.random()); n.nextClap = t + rand(0.13, 0.2); }
+      if (t < n.clapUntil && t >= n.nextClap && n.type !== 'runner') { playClap((n.type === 'family' ? 0.035 : 0.05) + 0.03 * Math.random()); n.nextClap = t + rand(0.13, 0.2); }
       if (playing && t >= n.nextTalk) {
         if (n.type === 'drunk') { say(n, pick(LINES.drunkListen)); n.nextTalk = t + rand(5, 9); }
         else if (n.type === 'family') { say(n, pick(LINES.kidListen)); n.nextTalk = t + rand(7, 12); }
@@ -1436,20 +1793,17 @@ function updateCrowd(dt, t) {
 }
 
 /* ───────── 플레이어 애니메이션 ───────── */
-let wasSinging = false, nextLyricAt = 0, nextSingNote = 0;
+let nextLyricAt = 0, nextSingNote = 0;
 function updatePlayer(dt, t) {
   const singing = isSinging();
   if (singing) {
-    if (!wasSinging && (singKey || singPad)) { voiceStart(); voiceTo(lastMidi); }
     lastNoteAt = now;
     heat = Math.min(1, heat + dt * 0.05 * attractMult());
     if (!setStats) setStats = newSet();
     setStats.singT += dt;
-    if (t >= nextLyricAt) { say(playerSpeaker, pick(LINES.playerSing)); nextLyricAt = t + rand(4, 7); }
+    if (voice && t >= nextLyricAt) { say(playerSpeaker, pick(LINES.playerSing)); nextLyricAt = t + rand(4, 7); } // 합성 목소리일 때만 가사 말풍선
     if (t >= nextSingNote) { spawnNoteSprite('sing', true); nextSingNote = t + 0.45; }
-  } else if (wasSinging) voiceStop();
-  if (!singKey && !singPad && voice) voiceStop();
-  wasSinging = singing;
+  }
   mouth.scale.y = singing ? 0.5 + Math.abs(Math.sin(t * 9)) * 0.7 : 0.25;
 
   strum = Math.max(0, strum - dt * 7);
@@ -1509,6 +1863,7 @@ function enterLocation(id) {
   buildEnv(id);
   spawnCrowd();
   heat = 0; lastNoteAt = -99; setStats = null; applauded = true; nextStopAt = now + 2;
+  resetChoir();
   $('#locName').textContent = `${env.L.emoji} ${env.L.name}`;
 }
 function travel(id) {
@@ -1532,9 +1887,6 @@ function closeIntro() { introEl.hidden = true; ensureAudio(); }
 function toggleIntro() { introEl.hidden = !introEl.hidden; }
 $('#startBtn').addEventListener('click', closeIntro);
 $('#helpBtn').addEventListener('click', () => { introEl.hidden = false; $('#startBtn').focus(); });
-const micBtn = $('#micBtn');
-function updateMicBtn() { micBtn.textContent = micOn ? '🎙️ 마이크 끄기' : '🎙️ 마이크로 직접 노래하기'; micBtn.classList.toggle('on', micOn); }
-micBtn.addEventListener('click', toggleMic);
 function toast(text) {
   const box = $('#toasts'), el = document.createElement('div');
   el.className = 'toast'; el.textContent = text;
@@ -1555,7 +1907,20 @@ function updateHud() {
   if (vals.f !== last.f) hud.fol.textContent = fmtCount(followersCache);
   if (vals.u !== last.u) { hud.badge.textContent = S.unseen; hud.badge.hidden = !S.unseen; }
   last = vals;
+  const lv = singHeld ? (voice ? '100%' : clamp(micLevel / (CFG.micThreshold * 4), 0, 1) * 100 + '%') : '0%';
+  if (lv !== lastLv) { lvls.forEach((e) => { e.style.width = lv; }); lastLv = lv; }
+  let ht = '';
+  if (choirOn()) ht = '🔥 떼창 중!';
+  else if (hookCand && hookCand.count >= 2 && !hook) ht = `🎵 후렴 익히는 중 ${'●'.repeat(Math.min(hookCand.count, CFG.hookRepeats))}${'○'.repeat(Math.max(0, CFG.hookRepeats - hookCand.count))} 한 번 더!`;
+  else if (hookCand && hookCand.count >= 2) ht = `🎵 새 후렴 익히는 중 ${'●'.repeat(Math.min(hookCand.count, CFG.hookRepeats))}${'○'.repeat(Math.max(0, CFG.hookRepeats - hookCand.count))}`;
+  else if (hook && c < CFG.choirMinCrowd) ht = `🎤 관객이 후렴을 외웠어요. ${CFG.choirMinCrowd}명 이상 모이면 떼창 (지금 ${c}명)`;
+  else if (hook) ht = '🎤 후렴을 치거나 📣 넘기기를 누르면 관객이 따라 불러요';
+  if (ht !== lastHook) { hookEl.textContent = ht; hookEl.hidden = !ht; hookEl.classList.toggle('hot', ht.startsWith('🔥')); lastHook = ht; }
 }
+const hookEl = $('#hook');
+let lastHook = null;
+const lvls = [...document.querySelectorAll('.lvl')];
+let lastLv = '';
 
 /* ───────── 내 스마트폰 ───────── */
 const phScreen = $('#phScreen');
@@ -1835,7 +2200,6 @@ resize();
 applyLook();
 enterLocation(S.loc);
 snsTick();
-updateMicBtn();
 
 const clock = new THREE.Clock();
 let slowT = 0;
@@ -1848,6 +2212,8 @@ function step(dt) {
   updateFlyers(dt, now);
   updateNotes(dt);
   updateFloats(dt);
+  updateHand();
+  if (hist.length && now - hist[hist.length - 1].t > 30) { hist.length = 0; hookCand = null; }
   updateBubbles(now);
   env.tick(now);
   slowT += dt;
@@ -1869,7 +2235,9 @@ frame();
 window.__busk = {
   S, npcs, noteOn, cam, camTarget, say, step, travel, enterLocation, openPhone, toast, applyLook, cfg: CFG,
   get heat() { return heat; }, get now() { return now; }, get rec() { return rec; }, set paused(v) { paused = v; },
-  sing(v) { singKey = v; },
+  sing(v) { if (v) singDown(); else singUp(); },
+  set micLevel(v) { micLevel = v; },
+  get hook() { return hook; }, get hookCand() { return hookCand; }, choirOn, handDown, handUp,
   tick(dt) { step(dt); if (rec) updateRecording(now); },
 };
 })();
