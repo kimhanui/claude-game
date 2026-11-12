@@ -26,3 +26,16 @@
 | `tiers[].score` | 그 단계가 합체로 생길 때 점수 |
 | `tiers[].color` | 기본 색 (이미지 없거나 로드 실패 시 사용) |
 | `tiers[].image` | 이미지 경로 (선택) |
+
+## 파일
+- `index.html` : 화면·테마 드롭다운·테마 script 목록
+- `game.js` : Verlet 물리, 합체, 점수, 게임 오버 판정
+- `themes/*.js` : 테마 정의 (`window.THEMES.push`, file:// 에서 fetch 가 막혀 JS 로 등록)
+- `assets/<테마>/` : 테마 이미지
+
+## 개발 참고
+- 합체 직후 큰 겹침 보정이 속도로 바뀌어 튕겨나가는 현상 → 서브스텝당 속도 상한 `MAX_SPEED`
+- 최고점은 `localStorage` 에 테마별 저장
+
+## 테스트 훅
+- `window.MergeDrop` (`state`, `tick`, `reset`, `drop`, `setAim`) → DOM 스텁으로 node 헤드리스 시뮬레이션 가능
