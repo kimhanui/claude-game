@@ -20,6 +20,7 @@ const GB_KEEP = 200, GB_SEND = 200, GB_MAX_LEN = 100, GB_INTERVAL_MS = 5000; // 
 const FREE_TOKENS = 5, AD_REWARD = 1, AD_DAILY_MAX = 10;
 const AD_WAIT_MS = Number(process.env.AD_WAIT_MS) || 15000; // 광고(대기 화면) 최소 시청 시간
 const RANK_TOP = 10;
+const POINT_INTERVAL_MS = 500; // 인형 가리키기 최소 간격
 // 구경꾼 예측 내기: 플레이어 차례 시작 ~ DROP(또는 조준 시간 종료) 전까지 성공/실패 중 한쪽에 토큰을 검
 // 적중자끼리 전체 판돈을 1/n 균등 분배 (나머지는 먼저 건 순서대로 1개씩), 적중자가 없거나 판이 무효면 전액 환불
 const BET_MAX = 10;
@@ -64,6 +65,7 @@ function readUid(req) {
   const m = /(?:^|;\s*)cd_uid=([0-9a-f]{32,64})(?:;|$)/.exec(req.headers.cookie || '');
   return m ? m[1] : null;
 }
+const publicId = uid => crypto.createHash('sha256').update(uid).digest('hex').slice(0, 10);
 function issueUid(req, res) {
   if (readUid(req)) return;
   const https = req.headers['x-forwarded-proto'] === 'https' || !!req.socket.encrypted; // Render 등은 프록시 뒤 https
@@ -87,26 +89,42 @@ const VERSION = (() => {
 })();
 
 const server = http.createServer((req, res) => {
+  const pathname = (req.url || '').split('?')[0];
+  if (req.method === 'POST' && pathname === '/u/og') return receiveOg(req, res);
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
   issueUid(req, res);
-  const pathname = (req.url || '').split('?')[0];
   if (pathname === '/version.json') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
     return res.end(JSON.stringify(VERSION));
   }
   const share = /^\/u\/([0-9a-f]{10})\/?$/.exec(pathname);
-  if (share) return serveSharePage(share[1], res);
+  if (share) return serveSharePage(share[1], req, res);
+  const card = /^\/u\/([0-9a-f]{10})\.json$/.exec(pathname);
+  if (card) return serveCardJson(card[1], res);
+  const og = /^\/u\/([0-9a-f]{10})\/og\.jpg$/.exec(pathname);
+  if (og) return serveOg(og[1], res);
   serveStatic(req, res);
 });
 
 // ================= 자랑 페이지 (/u/<공개ID>) =================
 const esc = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-function serveSharePage(id, res) {
+// 미리보기 크롤러용 절대 주소 (Render 등은 프록시 뒤 https)
+function originOf(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http')).split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost').split(',')[0].trim();
+  return `${proto === 'https' ? 'https' : 'http'}://${host.replace(/[^\w.:-]/g, '')}`;
+}
+function serveSharePage(id, req, res) {
   const s = stats.get(id);
+  const origin = originOf(req);
+  const img = `${origin}/u/${id}/og.jpg` + (s && s.ogAt ? `?v=${s.ogAt}` : '');
   const head = (title, desc) => `<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>
 <meta name="description" content="${esc(desc)}"><meta property="og:type" content="website">
 <meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(desc)}">
+<meta property="og:url" content="${esc(`${origin}/u/${id}`)}"><meta property="og:site_name" content="Claw Drop 3D">
+<meta property="og:image" content="${esc(img)}"><meta property="og:image:width" content="${OG_W}"><meta property="og:image:height" content="${OG_H}">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${esc(img)}">
 <style>
   :root{--bg:#1d1b2e;--panel:#2b2842;--text:#f3f0ff;--sub:#a9a3c9;--line:#47426b;--accent:#ffb84d}
   *{box-sizing:border-box} body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);
@@ -137,6 +155,57 @@ function serveSharePage(id, res) {
 <div class="kinds">${kinds}</div><a class="go" href="/games/claw-machine/">나도 인형뽑기 하러 가기</a></main></body></html>`);
 }
 
+// ================= 자랑하기 썸네일 (og:image) =================
+// 브라우저가 자랑하기 때 그린 1200x630 카드(JPEG)를 받아 저장, 크롤러에 제공. 없으면 기본 이미지
+const OG_W = 1200, OG_H = 630, OG_MAX_BYTES = 200 * 1024, OG_INTERVAL_MS = 10000, OG_CACHE_MAX = 50;
+const OG_DEFAULT = path.join(ROOT, 'games', 'claw-machine', 'og-default.jpg');
+const ogCache = new Map();   // 공개 ID -> Buffer (최근 사용분만)
+const ogLastAt = new Map();  // 공개 ID -> 마지막 업로드 시각
+function cacheOg(id, buf) {
+  ogCache.delete(id); ogCache.set(id, buf);
+  while (ogCache.size > OG_CACHE_MAX) ogCache.delete(ogCache.keys().next().value);
+}
+function serveCardJson(id, res) {
+  const s = stats.get(id);
+  res.setHeader('Cache-Control', 'no-cache');
+  if (!s) { res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' }); return res.end('{}'); }
+  rollDay(s);
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify({ name: s.name, color: s.color, total: s.total, dayWins: s.dayWins, rank: rankOf(id), kinds: s.kinds }));
+}
+async function serveOg(id, res) {
+  let buf = ogCache.get(id);
+  if (!buf && stats.get(id) && stats.get(id).ogAt) { buf = await store.loadOg(id); if (buf) cacheOg(id, buf); }
+  if (!buf) {
+    try { buf = await fs.promises.readFile(OG_DEFAULT); } catch (e) { res.writeHead(404); return res.end(); }
+  }
+  res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': buf.length, 'Cache-Control': 'public, max-age=300' });
+  res.end(buf);
+}
+function receiveOg(req, res) {
+  const done = (code, body) => { if (!res.headersSent) { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); } };
+  const uid = readUid(req);
+  const id = uid && publicId(uid);
+  if (!id || !stats.get(id)) { req.resume(); return done(403, { error: 'no_user' }); }
+  const now = Date.now();
+  if (now - (ogLastAt.get(id) || 0) < OG_INTERVAL_MS) { req.resume(); return done(429, { error: 'too_fast' }); }
+  if (Number(req.headers['content-length']) > OG_MAX_BYTES) { req.resume(); return done(413, { error: 'too_big' }); }
+  const chunks = []; let size = 0, over = false;
+  req.on('data', c => { size += c.length; if (size > OG_MAX_BYTES) over = true; else chunks.push(c); });
+  req.on('error', () => done(400, { error: 'read' }));
+  req.on('end', async () => {
+    if (over) return done(413, { error: 'too_big' });
+    const buf = Buffer.concat(chunks);
+    if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[2] !== 0xff) return done(400, { error: 'not_jpeg' });
+    ogLastAt.set(id, now);
+    cacheOg(id, buf);
+    const s = stats.get(id);
+    s.ogAt = now; store.saveUser(id, s);
+    await store.saveOg(id, buf);
+    done(200, { ok: true, v: now });
+  });
+}
+
 // ================= 유저 통계 (토큰·GET 수, store 에 영구 저장) =================
 const store = createStore({ log: t => log(t) });
 const stats = new Map();   // 공개 ID -> { name, color, total, kinds[], day, dayWins, lastWinAt, tokens, ads }
@@ -145,7 +214,7 @@ function normStat(o) {
   const n = v => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
   const kinds = KIND_INFO.map((_, i) => n(o && Array.isArray(o.kinds) ? o.kinds[i] : 0));
   return { name: String(o && o.name || 'Guest'), color: String(o && o.color || '#ffffff'), total: n(o && o.total), kinds,
-    day: String(o && o.day || ''), dayWins: n(o && o.dayWins), lastWinAt: n(o && o.lastWinAt), tokens: n(o && o.tokens), ads: n(o && o.ads) };
+    day: String(o && o.day || ''), dayWins: n(o && o.dayWins), lastWinAt: n(o && o.lastWinAt), tokens: n(o && o.tokens), ads: n(o && o.ads), ogAt: n(o && o.ogAt) };
 }
 // 날짜가 바뀌었으면 무료 토큰 충전·광고 횟수·오늘 GET 초기화 (true = 변경됨)
 function rollDay(s) {
@@ -179,6 +248,7 @@ let queue = [];            // user[] (대기 순서)
 let player = null;         // 현재 차례 user
 let turnTimer = null;
 let snapshot = null;       // 최신 기계 상태 (차례 클라이언트가 보낸 것)
+let turnPower = null;      // 이번 차례 집게 세기 0~1 (차례 시작 시 랜덤, 모두에게 공개)
 let bet = null;            // 진행 중 내기 { round, playerId, playerName, open, closeAt, timer, entries: Map(id -> {side, amount}) }
 let betRound = 0;
 
@@ -212,7 +282,7 @@ function betPool() {
   if (bet) for (const e of bet.entries.values()) { pool[e.side].n++; pool[e.side].sum += e.amount; }
   return pool;
 }
-const betOpenMsg = () => ({ t: 'bet_open', round: bet.round, player: bet.playerId, name: bet.playerName, closesInMs: Math.max(0, bet.closeAt - Date.now()), max: BET_MAX, pool: betPool() });
+const betOpenMsg = () => ({ t: 'bet_open', round: bet.round, player: bet.playerId, name: bet.playerName, closesInMs: Math.max(0, bet.closeAt - Date.now()), max: BET_MAX, power: turnPower, pool: betPool() });
 function openBet(u) {
   if (bet) settleBet('void');
   bet = { round: ++betRound, playerId: u.id, playerName: u.name, open: true, closeAt: Date.now() + BET_WINDOW_MS, entries: new Map() };
@@ -272,10 +342,11 @@ function startNextTurn() {
     s.tokens--; saveStat(u); sendTokens(u);
     player = u;
   }
-  if (!player) return false;
+  if (!player) { turnPower = null; return false; }
+  turnPower = Math.round(Math.random() * 100) / 100;
   clearTimeout(turnTimer);
   turnTimer = setTimeout(() => { log(`timeout ${player && player.name}`); endTurn('void'); }, TURN_LIMIT_MS);
-  broadcast({ t: 'turn', player: player.id, snapshot });
+  broadcast({ t: 'turn', player: player.id, snapshot, power: turnPower });
   openBet(player);
   log(`turn -> ${player.name}`);
   return true;
@@ -318,13 +389,13 @@ wss.on('connection', (ws, req) => {
       // 같은 브라우저의 다른 탭이 이미 접속 중이면 새 탭으로 전환: 기존 탭은 종료 안내 후 끊음(기존 탭은 재연결 안 함)
       const old = users.get(uid);
       if (old) { send(old.ws, { t: 'replaced' }); removeUser(old); old.ws.close(4001, 'replaced'); }
-      const id = crypto.createHash('sha256').update(uid).digest('hex').slice(0, 10); // 공개용 ID (쿠키 원본은 공유하지 않음)
+      const id = publicId(uid); // 공개용 ID (쿠키 원본은 공유하지 않음)
       me = { sid: uid, id, name: 'Guest-' + id.slice(0, 4).toUpperCase(), color: COLORS[parseInt(id.slice(4, 6), 16) % COLORS.length], ws };
       users.set(me.sid, me);
       const st = statOf(me);
       if (st.name !== me.name || st.color !== me.color) { st.name = me.name; st.color = me.color; saveStat(me); }
       log(`join ${me.name} (${users.size})`);
-      send(ws, { ...presenceMsg(), t: 'welcome', you: pub(me), snapshot, guestbook: guestbook.slice(-GB_SEND) });
+      send(ws, { ...presenceMsg(), t: 'welcome', you: pub(me), snapshot, power: player ? turnPower : null, guestbook: guestbook.slice(-GB_SEND) });
       sendTokens(me);
       if (bet && bet.open && bet.playerId !== me.id) send(ws, betOpenMsg());
       broadcastPresence();
@@ -389,6 +460,14 @@ wss.on('connection', (ws, req) => {
       case 'bet':
         placeBet(me, m);
         break;
+      case 'point': { // 기계 안 인형 가리키기: 중계만 (같은 id 재전송 = 해제, 클라이언트가 토글)
+        const now = Date.now();
+        if (!Number.isInteger(m.id) || m.id < 0 || m.id >= 100000) break;
+        if (me.pointAt && now - me.pointAt < POINT_INTERVAL_MS) break;
+        me.pointAt = now;
+        broadcast({ t: 'point', by: me.id, id: m.id }, me);
+        break;
+      }
       case 'gb_post': {
         const text = cleanText(m.text);
         const now = Date.now();

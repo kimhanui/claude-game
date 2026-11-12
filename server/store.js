@@ -1,6 +1,6 @@
 // 영구 저장소: 유저 통계(토큰·GET 수 등)와 방명록
 // - UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN 이 있으면 Upstash Redis (REST, 내장 fetch 사용)
-// - 없으면 로컬 파일 (data/stats.json, data/guestbook.json)
+// - 없으면 로컬 파일 (data/stats.json, data/guestbook.json, data/og/)
 // 서버는 메모리 값을 기준으로 동작하고 이 모듈은 기록만 담당 → 저장 실패해도 게임은 계속 진행 (로그만 남김)
 'use strict';
 const fs = require('fs');
@@ -13,7 +13,7 @@ function createStore(opts = {}) {
   const url = (opts.url ?? process.env.UPSTASH_REDIS_REST_URL ?? '').replace(/\/+$/, '');
   const token = opts.token ?? process.env.UPSTASH_REDIS_REST_TOKEN ?? '';
   const prefix = opts.prefix ?? process.env.REDIS_PREFIX ?? 'cd';
-  const dataDir = opts.dataDir ?? path.join(__dirname, 'data');
+  const dataDir = opts.dataDir ?? process.env.DATA_DIR ?? path.join(__dirname, 'data');
   const statsFile = opts.statsFile ?? process.env.STATS_FILE ?? path.join(dataDir, 'stats.json');
   const gbFile = opts.gbFile ?? process.env.GB_FILE ?? path.join(dataDir, 'guestbook.json');
   const log = opts.log || (t => console.log(t));
@@ -106,6 +106,23 @@ function createStore(opts = {}) {
       gbCache.push(entry);
       if (gbCache.length > GB_KEEP) gbCache = gbCache.slice(-GB_KEEP);
       await writeJson(gbFile, gbCache);
+    },
+    // 자랑하기 썸네일(og:image) JPEG: Redis 는 base64 문자열, 파일 모드는 data/og/<id>.jpg
+    async saveOg(id, buf) {
+      if (mode === 'redis') {
+        try { await redis([['SET', `${prefix}:og:${id}`, buf.toString('base64')]]); return true; }
+        catch (e) { log(`store og fail (redis): ${e.message}`); return false; }
+      }
+      const file = path.join(dataDir, 'og', `${id}.jpg`);
+      try { await fs.promises.mkdir(path.dirname(file), { recursive: true }); await fs.promises.writeFile(file, buf); return true; }
+      catch (e) { log(`store og fail: ${e.message}`); return false; }
+    },
+    async loadOg(id) {
+      if (mode === 'redis') {
+        try { const [b64] = await redis([['GET', `${prefix}:og:${id}`]]); return b64 ? Buffer.from(b64, 'base64') : null; }
+        catch (e) { log(`store og load fail (redis): ${e.message}`); return null; }
+      }
+      try { return await fs.promises.readFile(path.join(dataDir, 'og', `${id}.jpg`)); } catch (e) { return null; }
     },
   };
 }

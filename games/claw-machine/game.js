@@ -18,11 +18,10 @@
   const AIM_TIME = 20;            // 조준 제한 시간(초)
   const GRAVITY = -14;
   const PRIZE_COUNT = 18;
-  const STRENGTH = {              // grab: 잡기 기본 확률, slip: 들고 있는 동안 초당 놓칠 확률
-    weak:   { grab: 0.5,  slip: 0.45 },
-    normal: { grab: 0.75, slip: 0.18 },
-    strong: { grab: 0.95, slip: 0.03 },
-  };
+  // 집게 세기 power(0~1): 매 판 랜덤 (멀티는 서버가 정해 모두에게 공개). 클수록 잘 잡고 덜 놓침
+  // grab: 잡기 기본 확률 0.35~0.95, slip: 들고 올라오는 동안 초당 놓칠 확률 0.52~0.02
+  const clawCfg = pw => ({ grab: 0.35 + 0.6 * pw, slip: 0.02 + 0.5 * Math.pow(1 - pw, 1.5) });
+  const BOUNCE_V = 4.2;           // 튕겨나갈 때 위로 솟는 속도
 
   // ================= 렌더러/씬 =================
   const canvas = document.getElementById('view');
@@ -131,11 +130,12 @@
 
   // ================= 인형 =================
   const KINDS = [
-    { key: 'bear', name: '곰',  emoji: '🧸', colors: ['#c98b5a', '#a86b3f', '#e7b98a'] },
-    { key: 'bunny', name: '토끼', emoji: '🐰', colors: ['#ffffff', '#ffd1e3', '#e8e0ff'] },
-    { key: 'cat', name: '고양이',   emoji: '🐱', colors: ['#ffb36b', '#9a9aa8', '#2f2f3a'] },
-    { key: 'chick', name: '병아리', emoji: '🐥', colors: ['#ffe15a', '#ffd23f'] },
-    { key: 'blob', name: '젤리',  emoji: '💧', colors: ['#7ad7ff', '#8ef0b0', '#c49bff'] },
+    // bounce: 집게로 집을 때 튕겨나가는 성질 (클수록 잘 튕기고 들고 있을 때도 잘 빠짐)
+    { key: 'bear', name: '곰',  emoji: '🧸', colors: ['#c98b5a', '#a86b3f', '#e7b98a'], bounce: 0.08 },
+    { key: 'bunny', name: '토끼', emoji: '🐰', colors: ['#ffffff', '#ffd1e3', '#e8e0ff'], bounce: 0.2 },
+    { key: 'cat', name: '고양이',   emoji: '🐱', colors: ['#ffb36b', '#9a9aa8', '#2f2f3a'], bounce: 0.15 },
+    { key: 'chick', name: '병아리', emoji: '🐥', colors: ['#ffe15a', '#ffd23f'], bounce: 0.35 },
+    { key: 'blob', name: '젤리',  emoji: '💧', colors: ['#7ad7ff', '#8ef0b0', '#c49bff'], bounce: 0.6 },
   ];
 
   function plushMesh(kind, color, r) {
@@ -471,7 +471,6 @@
     db.disabled = role !== 'player' && role !== 'spectator';
     const canControl = role === 'player';
     $('refillBtn').disabled = !canControl;
-    $('strength').disabled = !canControl;
     rebuildAvatars();
   }
 
@@ -480,6 +479,7 @@
       case 'welcome':
         me = m.you;
         presence = { users: m.users || [], queue: m.queue || [], player: m.player || null };
+        setPower(m.player ? m.power : null);
         document.body.classList.add('multi');
         guestbook = Array.isArray(m.guestbook) ? m.guestbook : [];
         gbBook.visible = true;
@@ -496,6 +496,7 @@
         break;
       case 'turn':
         presence.player = m.player;
+        setPower(m.player ? m.power : null);
         if (me && m.player === me.id) beginTurn(m.snapshot);
         else {
           if (role === 'player') becomeSpectator(); // 시간 초과 등으로 차례 종료
@@ -549,6 +550,11 @@
       case 'event':
         if (m.type === 'get' && KINDS[m.kind]) toast(`GET! ${KINDS[m.kind].emoji} ${m.by}`);
         break;
+      case 'point': {
+        const u = userById(m.by);
+        if (u && Number.isInteger(m.id)) setPointer(u.id, m.id, u.name, u.color);
+        break;
+      }
       case 'bet_open': case 'bet_ok': case 'bet_reject': case 'bet_pool': case 'bet_close': case 'bet_result':
         onBetMessage(m);
         break;
@@ -682,6 +688,77 @@
       if (a) b.sp.position.set(a.position.x, 1.35, a.position.z);
     }
   }
+  // ================= 기계 안 인형 가리키기 (탭/클릭 → 인형 위 화살표 + 이름표, 4초) =================
+  const POINT_MS = 4000;
+  const pointers = new Map(); // uid -> { prizeId, group, until }
+  const pointCone = new THREE.ConeGeometry(0.13, 0.32, 14);
+  pointCone.rotateX(Math.PI); // 아래를 향하도록
+  const pointRing = new THREE.RingGeometry(0.86, 1, 32); // 인형 둘레 고리 (탑다운 시점에서도 잘 보이게), 반지름은 인형 크기에 맞춰 scale
+  pointRing.rotateX(-Math.PI / 2);
+  function dropPointer(uid) {
+    const pt = pointers.get(uid);
+    if (!pt) return;
+    scene.remove(pt.group);
+    pt.group.children.forEach(o => { if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
+    pointers.delete(uid);
+  }
+  // 같은 사람이 같은 인형을 다시 가리키면 해제
+  function setPointer(uid, prizeId, name, color) {
+    const cur = pointers.get(uid);
+    dropPointer(uid);
+    if (cur && cur.prizeId === prizeId) return false;
+    const group = new THREE.Group();
+    const cone = new THREE.Mesh(pointCone, new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    cone.renderOrder = 19;
+    const ring = new THREE.Mesh(pointRing, new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
+    ring.renderOrder = 19;
+    const label = labelSprite(name, color);
+    label.scale.set(1.3, 0.325, 1);
+    group.add(cone, ring, label);
+    scene.add(group);
+    pointers.set(uid, { prizeId, group, cone, ring, label, until: performance.now() + POINT_MS });
+    return true;
+  }
+  function updatePointers(now) {
+    for (const [uid, pt] of pointers) {
+      const p = prizes.find(q => q.id === pt.prizeId);
+      if (!p || now > pt.until) { dropPointer(uid); continue; }
+      const bob = Math.abs(Math.sin(now / 180));
+      pt.group.position.copy(p.mesh.position);
+      pt.cone.position.set(0, p.r + 0.35 + bob * 0.12, 0);
+      const rr = p.r + 0.1 + bob * 0.06; // 고리: 인형 둘레에서 숨쉬듯 커졌다 작아짐
+      pt.ring.scale.set(rr, 1, rr); pt.ring.position.y = p.r * 0.2;
+      pt.label.position.set(0, p.r + 0.75, -(p.r + 0.25)); // 이름표: 탑다운에서는 인형 위쪽(화면 위), 정면에서는 화살표 위
+    }
+  }
+  function pickPrize(e) {
+    pickNdc.set(e.clientX / window.innerWidth * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+    pickRay.setFromCamera(pickNdc, camera);
+    const hit = pickRay.intersectObjects(prizes.map(p => p.mesh), true)[0];
+    if (!hit) return null;
+    for (let o = hit.object; o; o = o.parent) { const p = prizes.find(q => q.mesh === o); if (p) return p; }
+    return null;
+  }
+  function pointAt(p) {
+    if (!p) return;
+    const uid = me ? me.id : 'me';
+    setPointer(uid, p.id, me ? me.name : '나', me ? me.color : '#ffb84d');
+    if (conn && me) conn.send({ t: 'point', id: p.id });
+  }
+  // 짧은 탭/클릭만 가리키기 (드래그·두 손가락 줌·방명록 책 클릭 제외)
+  let tap = null, tapPointers = 0;
+  canvas.addEventListener('pointerdown', e => {
+    tapPointers++;
+    tap = tapPointers === 1 && e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+  });
+  const tapEnd = () => { tapPointers = Math.max(0, tapPointers - 1); };
+  canvas.addEventListener('pointercancel', () => { tap = null; tapEnd(); });
+  canvas.addEventListener('pointerup', e => {
+    const t = tap; tap = null; tapEnd();
+    if (!t || Math.hypot(e.clientX - t.x, e.clientY - t.y) > 8 || pointerOnBook(e)) return;
+    pointAt(pickPrize(e));
+  });
+
   const $chatInput = $('chatInput'), $top0 = $('top');
   function setChat(open) {
     $top0.classList.toggle('chat', open);
@@ -858,7 +935,7 @@
     return pickRay.intersectObjects(gbBook.children.slice(1), true).length > 0; // 바닥 판(pad) 제외
   }
   canvas.addEventListener('pointerdown', e => { if (pointerOnBook(e)) { e.preventDefault(); openGuestbook(); } });
-  canvas.addEventListener('pointermove', e => { canvas.style.cursor = pointerOnBook(e) ? 'pointer' : ''; });
+  canvas.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') canvas.style.cursor = pointerOnBook(e) || pickPrize(e) ? 'pointer' : ''; });
   function openGuestbook() {
     if (!me) return;
     keys.clear();
@@ -898,8 +975,17 @@
     if (!simulating()) { const t = spectatorMsg(); if (ui.msg.textContent !== t) setMsg(t); }
   }
 
+  // 집게 세기: 멀티는 서버 값(차례 없으면 null), 싱글은 판마다 랜덤
+  let power = null;
+  const curPower = () => (power == null ? 0.5 : power);
+  function setPower(v) {
+    power = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;
+    $('power').textContent = power == null ? '-' : power.toFixed(2);
+    $('powerBar').style.width = power == null ? '0%' : `${Math.round(power * 100)}%`;
+  }
   function startAim() {
     st.phase = 'aim'; st.timer = AIM_TIME;
+    if (role === 'single') setPower(Math.round(Math.random() * 100) / 100);
     if (role === 'player') setMsg('내 차례 (1판): ' + HOWTO);
     else setMsg(coins > 0 ? HOWTO : '코인 부족: "코인 +5" 를 눌러 충전');
   }
@@ -921,8 +1007,10 @@
     setMsg('내려가는 중...');
   }
 
+  let lastBounce = false;
   function tryGrab() {
-    const cfg = STRENGTH[$('strength').value];
+    const cfg = clawCfg(curPower());
+    lastBounce = false;
     const tipY = st.y - CLAW_REACH;
     let best = null, bestD = Infinity;
     for (const p of prizes) {
@@ -934,6 +1022,15 @@
     if (!best) return null;
     const align = 1 - Math.min(1, bestD / 0.6) * 0.6;   // 중심에 가까울수록 유리
     const sizePenalty = best.r > 0.5 ? 0.85 : 1;
+    // 잘 튕기는 인형은 세게 쥘수록 오히려 튕겨나가기 쉬움
+    if (Math.random() < best.kind.bounce * (0.3 + 0.5 * curPower())) {
+      const ang = bestD > 0.02 ? Math.atan2(best.z - st.z, best.x - st.x) : Math.random() * Math.PI * 2;
+      const hv = 1.4 + Math.random() * 1.2, h = FIXED / 4; // 물리 하위 단계당 이동량으로 속도 부여
+      best.px = best.x - Math.cos(ang) * hv * h; best.pz = best.z - Math.sin(ang) * hv * h;
+      best.py = best.y - BOUNCE_V * h;
+      lastBounce = true;
+      return null;
+    }
     if (Math.random() < cfg.grab * align * sizePenalty) {
       best.held = true;
       best.offX = (best.x - st.x) * 0.4; best.offZ = (best.z - st.z) * 0.4;
@@ -953,7 +1050,8 @@
   }
 
   function updateClaw(dt) {
-    const cfg = STRENGTH[$('strength').value];
+    const cfg = clawCfg(curPower());
+    if (st.held) cfg.slip *= 1 + st.held.kind.bounce; // 잘 튕기는 인형은 들고 있을 때도 잘 빠짐
     switch (st.phase) {
       case 'aim': {
         if (noCoins()) break;
@@ -977,7 +1075,8 @@
           st.held = tryGrab();
           if (st.held) st.open = 0.28;
           st.phase = 'lift';
-          setMsg(st.held ? '잡았다! 올리는 중...' : '헛손질...');
+          setMsg(st.held ? '잡았다! 올리는 중...' : lastBounce ? '튕겨나갔다!' : '헛손질...');
+          if (lastBounce && role !== 'spectator') toast('튕김!');
         }
         break;
       case 'lift':
@@ -1118,7 +1217,7 @@
     $bet.classList.toggle('show', show && !bet.folded);
     $betPill.classList.toggle('show', show && bet.folded);
     if (!show) { clearInterval(betTick); betTick = null; return; }
-    $('betTitle').textContent = `🎲 ${bet.name} 뽑기 예측`;
+    $('betTitle').textContent = `🎲 ${bet.name} 뽑기 예측` + (Number.isFinite(bet.power) ? ` · 💪${bet.power.toFixed(2)}` : '');
     const p = bet.pool || {};
     $('betSuccN').textContent = p.succ ? p.succ.n : 0; $('betSuccSum').textContent = p.succ ? p.succ.sum : 0;
     $('betFailN').textContent = p.fail ? p.fail.n : 0; $('betFailSum').textContent = p.fail ? p.fail.sum : 0;
@@ -1161,7 +1260,7 @@
   function onBetMessage(m) {
     switch (m.t) {
       case 'bet_open':
-        bet = { round: m.round, name: m.name, open: true, closeAt: performance.now() + (m.closesInMs || 0), max: m.max || 10, pool: m.pool, mine: null, skipped: false, folded: false, result: null };
+        bet = { round: m.round, name: m.name, open: true, closeAt: performance.now() + (m.closesInMs || 0), max: m.max || 10, power: m.power, pool: m.pool, mine: null, skipped: false, folded: false, result: null };
         $betAmt.value = 1;
         break;
       case 'bet_ok':
@@ -1201,8 +1300,55 @@
   $betAmt.addEventListener('keydown', e => { if (e.key === 'Escape') $betAmt.blur(); });
 
   // ================= 자랑하기 (내 기록 페이지 링크 공유) =================
+  // 링크 미리보기 썸네일(og:image): 1200x630 카드를 그려 서버에 올림. data 가 없으면 기본 이미지(홍보 문구)
+  const loadImg = src => new Promise(res => { if (!src) return res(null); const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; });
+  async function makeShareCard(data) {
+    const W = 1200, H = 630, cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const g = cv.getContext('2d'), FONT = 'system-ui,-apple-system,"Segoe UI","Malgun Gothic",sans-serif';
+    const bg = g.createLinearGradient(0, 0, W, H); bg.addColorStop(0, '#2b2842'); bg.addColorStop(1, '#1d1b2e');
+    g.fillStyle = bg; g.fillRect(0, 0, W, H);
+    const fit = (text, max) => { let t = String(text); while (t.length > 1 && g.measureText(t).width > max) t = t.slice(0, -1); return t === String(text) ? t : t + '…'; };
+    g.textBaseline = 'alphabetic';
+    g.fillStyle = '#ffb84d'; g.font = `700 34px ${FONT}`; g.fillText('🕹 Claw Drop 3D', 64, 84);
+    const okColor = data && /^#[0-9a-f]{6}$/i.test(data.color) ? data.color : '#f3f0ff';
+    g.fillStyle = data ? okColor : '#f3f0ff'; g.font = `800 72px ${FONT}`;
+    g.fillText(fit(data ? data.name : '인형뽑기 하러 오세요', W - 128), 64, 180);
+    g.fillStyle = '#a9a3c9'; g.font = `600 40px ${FONT}`;
+    g.fillText(data ? `누적 ${data.total}개 · 오늘 ${data.dayWins}개` + (data.rank ? ` · 오늘 ${data.rank}위` : '')
+      : '다 같이 구경하고 내기하는 3D 인형뽑기', 64, 250);
+    const imgs = await Promise.all(KINDS.map(k => {
+      const mine = [...collection].reverse().find(c => c.kind === k.key);
+      return loadImg(makeThumb({ kind: k.key, color: mine ? mine.color : k.colors[0] }));
+    }));
+    const PW = 200, GAP = 18, TOP = 300, PH = 270;
+    KINDS.forEach((k, i) => {
+      const n = data ? (data.kinds && data.kinds[i]) || 0 : 1, x = 64 + i * (PW + GAP);
+      g.globalAlpha = 1; g.fillStyle = 'rgba(16,14,30,0.55)';
+      g.beginPath(); g.roundRect ? g.roundRect(x, TOP, PW, PH, 22) : g.rect(x, TOP, PW, PH); g.fill();
+      g.globalAlpha = n ? 1 : 0.3;
+      if (imgs[i]) g.drawImage(imgs[i], x + 10, TOP + 6, 180, 180);
+      else { g.font = `96px ${FONT}`; g.textAlign = 'center'; g.fillText(k.emoji, x + PW / 2, TOP + 140); }
+      g.textAlign = 'center'; g.fillStyle = '#f3f0ff'; g.font = `700 34px ${FONT}`;
+      g.fillText(data ? `${k.name} ×${n}` : k.name, x + PW / 2, TOP + 238);
+      g.textAlign = 'left';
+    });
+    g.globalAlpha = 1;
+    return new Promise(res => cv.toBlob(res, 'image/jpeg', 0.85));
+  }
+  async function uploadShareCard() {
+    const r = await fetch(`/u/${me.id}.json`, { cache: 'no-store' });
+    if (!r.ok) return false;
+    const blob = await makeShareCard(await r.json());
+    if (!blob) return false;
+    const up = await fetch('/u/og', { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+    return up.ok;
+  }
+
   async function shareLink() {
     if (!me) return;
+    // 썸네일 업로드는 기다리지 않음: 공유 시트는 클릭 직후 열어야 해서(브라우저 제한), 업로드는 뒤에서 진행
+    uploadShareCard().catch(() => {});
     const url = `${location.origin}/u/${me.id}`;
     try {
       if (navigator.share) { await navigator.share({ title: 'Claw Drop 3D', text: `${me.name} 님의 인형뽑기 기록`, url }); return; }
@@ -1324,7 +1470,6 @@
   $('gbForm').addEventListener('submit', e => { e.preventDefault(); postGuestbook(); });
   $gbInput.addEventListener('input', () => { $('gbLeft').textContent = GB_MAX - Array.from($gbInput.value).length; });
   $('viewBtn').addEventListener('click', toggleView);
-  $('strength').addEventListener('change', e => e.target.blur());
   function toggleView() { viewIdx = (viewIdx + 1) % VIEWS.length; $('viewBtn').textContent = '시점: ' + VIEWS[viewIdx].name + ' (C)'; }
 
   function resize() {
@@ -1450,6 +1595,7 @@
       if (sendAcc >= 1 / 15) { sendAcc = 0; sendState(); } // 약 15Hz 로 구경꾼에게 상태 전송
     }
     syncVisuals(dt);
+    updatePointers(now);
     updateHud();
     renderer.render(scene, camera);
     requestAnimationFrame(loop);
@@ -1493,5 +1639,5 @@
   // 테스트용 노출
   window.ClawGame = { st, get prizes() { return prizes; }, physics, updateClaw, drop, collectFallen, get won() { return sessionWon; }, get collection() { return collection; }, openCollection, closeCollection,
     exportSnapshot, applySnapshot, get role() { return role; }, get guestbook() { return guestbook; }, get gbUnread() { return gbUnread; }, openGuestbook, closeGuestbook,
-    get tokens() { return tokens; }, dropAction, openRank, closeRank, openAd, closeAd, shareLink };
+    get tokens() { return tokens; }, get power() { return power; }, get pointers() { return pointers; }, pointAt, updatePointers, setPower, dropAction, openRank, closeRank, openAd, closeAd, shareLink, makeShareCard, uploadShareCard };
 })();
